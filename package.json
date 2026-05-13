@@ -1,0 +1,36 @@
+{
+  "name": "my-trail-log",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "db:migrate": "node --env-file=.env.local scripts/migrate.mjs",
+    "db:seed-trails": "node --env-file=.env.local scripts/seed-trails.mjs",
+    "db:import-gpx": "node --env-file=.env.local scripts/import-gpx.mjs",
+    "db:rematch": "node --env-file=.env.local scripts/rematch.mjs",
+    "db:import-osm": "node --env-file=.env.local scripts/import-osm-trails.mjs",
+    "desc:update": "node --env-file=.env.local scripts/update-selected.mjs"
+  },
+  "dependencies": {
+    "@mapbox/polyline": "^1.2.1",
+    "@types/leaflet": "^1.9.21",
+    "leaflet": "^1.9.4",
+    "next": "14.2.35",
+    "pg": "^8.20.0",
+    "react": "^18",
+    "react-dom": "^18"
+  },
+  "devDependencies": {
+    "@types/mapbox__polyline": "^1.0.5",
+    "@types/node": "^20",
+    "@types/pg": "^8.20.0",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "postcss": "^8",
+    "tailwindcss": "^3.4.1",
+    "typescript": "^5"
+  }
+}

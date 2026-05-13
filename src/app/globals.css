@@ -1,0 +1,37 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html {
+  background-color: #FAF8F5;
+}
+
+body {
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background-color: #FAF8F5;
+  /* isolation: isolate creates a stacking context so body::before at
+     z-index:-1 paints above the body background but below page content. */
+  isolation: isolate;
+}
+
+/* Contour pattern overlay: solid burnt-orange masked by the image's
+   luminance channel (white lines = show through, dark grey = hide).
+   mask-mode: luminance is required — JPEG has no alpha so the default
+   alpha mode would show everything uniformly. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-color: #C4652A;
+  -webkit-mask-image: url('/contour-pattern.jpg');
+  -webkit-mask-repeat: repeat;
+  -webkit-mask-size: 800px auto;
+  mask-image: url('/contour-pattern.jpg');
+  mask-repeat: repeat;
+  mask-size: 800px auto;
+  mask-mode: luminance;
+  opacity: 0.12;
+}
