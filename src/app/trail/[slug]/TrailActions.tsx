@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import dynamic from "next/dynamic";
+import { TrailSelectionContext } from "./TrailSelectionContext";
 
 const TrailMap = dynamic(() => import("./TrailMap"), {
   ssr: false,
@@ -27,6 +28,11 @@ interface ApiResponse {
   error?: string;
 }
 
+interface ActivityWithGeo {
+  id: string;
+  activity_trail_geojson: object | null;
+}
+
 interface TrailActionsProps {
   trailSlug: string;
   trailGeoJson: object;
@@ -34,6 +40,7 @@ interface TrailActionsProps {
   initialManualGeoJson: object | null;
   initialManualSegments: ManualSegment[];
   hasProgress: boolean;
+  activities: ActivityWithGeo[];
   children?: React.ReactNode;
 }
 
@@ -44,8 +51,22 @@ export default function TrailActions({
   initialManualGeoJson,
   initialManualSegments,
   hasProgress,
+  activities,
   children,
 }: TrailActionsProps) {
+  const [selectedActivityId, setSelectedActivityId] = useState<string | null>(null);
+  const [selectedActivityGeoJson, setSelectedActivityGeoJson] = useState<object | null>(null);
+
+  const selectActivity = useCallback((id: string | null, geojson: object | null) => {
+    setSelectedActivityId(id);
+    setSelectedActivityGeoJson(geojson);
+  }, []);
+
+  const selectionContext = useMemo(
+    () => ({ selectedActivityId, selectActivity }),
+    [selectedActivityId, selectActivity]
+  );
+
   const [showRemaining, setShowRemaining] = useState(false);
   const [isMarkingMode, setIsMarkingMode] = useState(false);
   const [markingPoints, setMarkingPoints] = useState<Array<[number, number]>>([]);
@@ -165,7 +186,7 @@ export default function TrailActions({
   };
 
   return (
-    <>
+    <TrailSelectionContext.Provider value={selectionContext}>
       {/* Map */}
       <div className="mb-3">
         <TrailMap
@@ -176,6 +197,7 @@ export default function TrailActions({
           isMarkingMode={isMarkingMode}
           markingPoints={markingPoints}
           onMapClick={handleMapClick}
+          selectedActivityGeoJson={selectedActivityGeoJson}
         />
       </div>
 
@@ -408,6 +430,6 @@ export default function TrailActions({
           </div>
         </div>
       )}
-    </>
+    </TrailSelectionContext.Provider>
   );
 }

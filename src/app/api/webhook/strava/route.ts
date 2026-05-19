@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { waitUntil } from "@vercel/functions";
 import { pool } from "@/lib/db";
 import {
   getValidAccessToken,
@@ -61,7 +62,7 @@ export async function POST(req: Request) {
   if (event.object_type === "athlete" && event.aspect_type === "delete") {
     await handleDeauth(event.object_id);
   } else if (event.object_type === "activity" && event.aspect_type === "create") {
-    void handleNewActivity(event.object_id, event.owner_id);
+    waitUntil(handleNewActivity(event.object_id, event.owner_id));
   }
 
   return new Response("EVENT_RECEIVED", { status: 200 });

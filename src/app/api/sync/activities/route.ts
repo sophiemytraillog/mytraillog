@@ -146,9 +146,6 @@ export async function GET(request: NextRequest) {
           message: existingCount > 0 ? "Checking for new activities…" : "Starting sync…",
         });
 
-        // Track Strava IDs saved in the forward pass for description updates later.
-        const forwardNewIds: number[] = [];
-
         // ── Forward pass: activities newer than what we have ──────────────────
         for (let page = 1; ; page++) {
           if (request.signal.aborted) break;
@@ -159,7 +156,7 @@ export async function GET(request: NextRequest) {
           if (activities.length === 0) break;
 
           fetched += activities.length;
-          saved += await savePage(activities, (id) => forwardNewIds.push(id));
+          saved += await savePage(activities);
           send("progress", { fetched, saved, message: `Syncing… ${fetched} fetched, ${saved} saved` });
           if (activities.length < PER_PAGE) break;
         }
@@ -195,48 +192,8 @@ export async function GET(request: NextRequest) {
 
         console.log(`[sync] All passes complete. fetched=${fetched} saved=${saved}`);
 
-        // Trail matching phase
-        send("matching", { message: "Matching activities to trails…" });
-        let matchedTrails = 0;
-        try {
-          matchedTrails = await computeTrailProgress(userId);
-        } catch (matchErr) {
-          console.error("[sync/activities] Trail matching error:", matchErr);
-        }
-
-        // Description update phase — only for activities saved in the forward pass
-        // (new since last sync). Skip the backward pass to avoid hitting rate limits
-        // on a large historical backfill.
-        let descUpdated = 0;
-        if (userPrefs?.strava_description_updates && forwardNewIds.length > 0) {
-          send("matching", { message: `Updating Strava descriptions for ${forwardNewIds.length} new activit${forwardNewIds.length === 1 ? "y" : "ies"}…` });
-          const { rows: newActivities } = await pool.query<{ id: string; strava_activity_id: string }>(
-            `SELECT id, strava_activity_id::text
-             FROM activities
-             WHERE strava_activity_id = ANY($1::bigint[])
-               AND user_id = $2
-               AND strava_description_updated = FALSE`,
-            [forwardNewIds, userId]
-          );
-          for (const act of newActivities) {
-            if (request.signal.aborted) break;
-            try {
-              const matches = await getActivityTrailMatches(userId, act.id);
-              if (matches.length > 0) {
-                const updated = await writeTrailDescription(userId, act.id, parseInt(act.strava_activity_id), matches);
-                if (updated) descUpdated++;
-              }
-            } catch (err) {
-              if (err instanceof ScopeError) {
-                console.warn("[sync] Scope error updating description — skipping remaining:", err.message);
-                break;
-              }
-              console.error("[sync] Description update error:", err);
-            }
-          }
-          console.log(`[sync] Description updates complete: ${descUpdated} updated`);
-        }
-
+        // Notify the client and mark complete now — trail matching runs after so
+        // the spinner doesn't block the user while it processes.
         await pool.query(
           `UPDATE users
            SET sync_status    = 'complete',
@@ -248,9 +205,49 @@ export async function GET(request: NextRequest) {
         send("done", {
           fetched,
           saved,
-          matchedTrails,
           message: `Sync complete — ${saved} activit${saved === 1 ? "y" : "ies"} saved`,
         });
+
+        // Trail matching — runs after the client has been notified and closed the
+        // connection, so it won't block the UI.
+        let matchedTrails = 0;
+        try {
+          matchedTrails = await computeTrailProgress(userId);
+        } catch (matchErr) {
+          console.error("[sync/activities] Trail matching error:", matchErr);
+        }
+
+        // Description updates — likewise runs in the background after done.
+        let descUpdated = 0;
+        if (userPrefs?.strava_description_updates) {
+          const { rows: toUpdate } = await pool.query<{ id: string; strava_activity_id: string; name: string }>(
+            `SELECT id, strava_activity_id::text, name
+             FROM activities
+             WHERE user_id = $1
+               AND geometry IS NOT NULL
+               AND strava_description_updated = FALSE
+             ORDER BY start_date DESC`,
+            [userId]
+          );
+          if (toUpdate.length > 0) {
+            for (const act of toUpdate) {
+              try {
+                const matches = await getActivityTrailMatches(userId, act.id);
+                if (matches.length > 0) {
+                  const updated = await writeTrailDescription(userId, act.id, parseInt(act.strava_activity_id), matches);
+                  if (updated) descUpdated++;
+                }
+              } catch (err) {
+                if (err instanceof ScopeError) {
+                  console.warn("[sync] Scope error updating description — skipping remaining:", err.message);
+                  break;
+                }
+                console.error("[sync] Description update error:", err);
+              }
+            }
+          }
+          console.log(`[sync] Description updates complete: ${descUpdated} updated`);
+        }
       } catch (err) {
         const message =
           err instanceof Error ? err.message : "An unexpected error occurred";

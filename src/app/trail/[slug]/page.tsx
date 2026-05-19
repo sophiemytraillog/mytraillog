@@ -31,6 +31,7 @@ interface ActivityRow {
   activity_distance_m: number;
   strava_activity_id: string;
   trail_contribution_m: number;
+  activity_trail_geojson: object | null;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -110,7 +111,16 @@ export default async function TrailDetailPage({
                2
              )::geography
            )
-         )::int                                  AS trail_contribution_m
+         )::int                                  AS trail_contribution_m,
+         ST_AsGeoJSON(
+           ST_CollectionExtract(
+             ST_Intersection(
+               a.geometry,
+               ST_Buffer(t.geometry::geography, 50)::geometry
+             ),
+             2
+           )
+         )::json                                 AS activity_trail_geojson
        FROM activities a
        CROSS JOIN (SELECT geometry FROM trails WHERE slug = $2) t
        WHERE a.user_id = $1
@@ -160,6 +170,7 @@ export default async function TrailDetailPage({
           initialManualGeoJson={manualGeoJson}
           initialManualSegments={manualSegments}
           hasProgress={pct > 0}
+          activities={activities}
         >
           {/* Trail header */}
           <div className="mb-5 mt-5">

@@ -80,7 +80,7 @@ function buildTrailBlock(matches: TrailMatch[]): string {
     const completedKm = (m.completed_distance / 1000).toFixed(1);
     const totalKm = (m.total_distance / 1000).toFixed(1);
     const pct = Math.round(m.completion_percentage);
-    return `${m.name}: ${actKm}km (${pct}% · ${completedKm}km / ${totalKm}km)`;
+    return `🥾 ${m.name}: ${actKm}km (${pct}% · ${completedKm}km / ${totalKm}km)`;
   });
   return `\n\n${lines.join("\n")}\n${getAppUrl()}`;
 }

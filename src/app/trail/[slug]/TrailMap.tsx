@@ -18,6 +18,7 @@ export interface TrailMapProps {
   isMarkingMode: boolean;
   markingPoints: Array<[number, number]>; // [lon, lat]
   onMapClick: (latlng: [number, number]) => void;
+  selectedActivityGeoJson: object | null;
 }
 
 // Convert GeoJSON [lon, lat] pairs → Leaflet [lat, lon] arrays (handles LineString,
@@ -45,12 +46,15 @@ export default function TrailMap({
   isMarkingMode,
   markingPoints,
   onMapClick,
+  selectedActivityGeoJson,
 }: TrailMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<unknown>(null);
   const leafletRef = useRef<typeof import("leaflet") | null>(null);
   const trailLayerRef = useRef<unknown>(null);
   const manualLayerRef = useRef<unknown>(null);
+  const selectedLayerRef = useRef<unknown>(null);
+  const trailBoundsRef = useRef<unknown>(null);
   const markersRef = useRef<unknown[]>([]);
   // Tracks whether the async leaflet init has completed
   const leafletReadyRef = useRef(false);
@@ -130,7 +134,10 @@ export default function TrailMap({
       });
 
       const bounds = trailLayer.getBounds();
-      if (bounds.isValid()) map.fitBounds(bounds, { padding: [24, 24] });
+      if (bounds.isValid()) {
+        map.fitBounds(bounds, { padding: [24, 24] });
+        trailBoundsRef.current = bounds;
+      }
       map.invalidateSize();
 
       leafletReadyRef.current = true;
@@ -143,6 +150,8 @@ export default function TrailMap({
         leafletRef.current = null;
         trailLayerRef.current = null;
         manualLayerRef.current = null;
+        selectedLayerRef.current = null;
+        trailBoundsRef.current = null;
         markersRef.current = [];
         leafletReadyRef.current = false;
       }
@@ -188,6 +197,43 @@ export default function TrailMap({
     if (!containerRef.current) return;
     containerRef.current.style.cursor = isMarkingMode ? "crosshair" : "";
   }, [isMarkingMode]);
+
+  // ── Selected activity highlight (burnt orange) ───────────────────────────────
+  useEffect(() => {
+    const L = leafletRef.current;
+    const map = mapRef.current;
+    if (!L || !map || !leafletReadyRef.current) return;
+
+    if (selectedLayerRef.current) {
+      (selectedLayerRef.current as { remove: () => void }).remove();
+      selectedLayerRef.current = null;
+    }
+
+    if (selectedActivityGeoJson) {
+      const rings = toLatLngRings(selectedActivityGeoJson as GeoJsonGeom);
+      if (rings.length > 0) {
+        const layer = L.polyline(rings as L.LatLngExpression[][], {
+          color: "#C4652A",
+          weight: 5,
+          opacity: 1,
+          fill: false,
+          smoothFactor: 1,
+        }).addTo(map as L.Map);
+        selectedLayerRef.current = layer;
+
+        const bounds = layer.getBounds();
+        if (bounds.isValid()) {
+          (map as L.Map).fitBounds(bounds, { padding: [48, 48] });
+        }
+      }
+    } else {
+      // Deselected — zoom back to full trail
+      const trailBounds = trailBoundsRef.current;
+      if (trailBounds && (trailBounds as L.LatLngBounds).isValid()) {
+        (map as L.Map).fitBounds(trailBounds as L.LatLngBounds, { padding: [24, 24] });
+      }
+    }
+  }, [selectedActivityGeoJson]);
 
   // ── Orange dot markers for selected marking points ──────────────────────────
   useEffect(() => {

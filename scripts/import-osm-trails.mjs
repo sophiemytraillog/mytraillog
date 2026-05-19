@@ -26,7 +26,13 @@ void __dirname;
 const OVERPASS_URL = "https://overpass-api.de/api/interpreter";
 
 // Great Britain + Northern Ireland bounding box (south, west, north, east)
-const UK_BBOX = "49.9,-8.2,60.9,2.0";
+// Slightly tighter on the east (1.8 not 2.0) to avoid pulling in Normandy/Calais routes
+// whose nodes touch the bbox edge. The SQL length-fraction filter is the real guard.
+const UK_BBOX = "49.9,-8.2,60.9,1.8";
+
+// Require at least this fraction of the trail's length to lie within UK bounds.
+// Catches routes that are mostly in France or Ireland but have a node inside our bbox.
+const MIN_UK_FRACTION = 0.5;
 
 // Discard routes shorter than this — filters out short link/connector routes
 const MIN_LENGTH_M = 15_000;
@@ -181,7 +187,7 @@ async function main() {
 
     // ── 4. Import loop ─────────────────────────────────────────────────────
     console.log("Importing routes…");
-    console.log(`  (skipping routes shorter than ${MIN_LENGTH_M / 1000} km)\n`);
+    console.log(`  (skipping routes shorter than ${MIN_LENGTH_M / 1000} km or with <${MIN_UK_FRACTION * 100}% geometry inside UK bounds)\n`);
 
     let inserted = 0;
     let skipped_no_name = 0;
@@ -220,9 +226,15 @@ async function main() {
                   'long_distance_path'
            FROM geom
            WHERE ST_Length(g::geography) >= $5
+             AND COALESCE(
+                   ST_Length(
+                     ST_Intersection(g, ST_MakeEnvelope(-8.2, 49.9, 1.8, 60.9, 4326))::geography
+                   ) / NULLIF(ST_Length(g::geography), 0),
+                   0
+                 ) >= $6
            ON CONFLICT (slug) DO NOTHING
            RETURNING id`,
-          [geojson, name, slug, region, MIN_LENGTH_M]
+          [geojson, name, slug, region, MIN_LENGTH_M, MIN_UK_FRACTION]
         );
 
         if ((result.rowCount ?? 0) > 0) {

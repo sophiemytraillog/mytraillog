@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-type SyncState = "idle" | "syncing" | "matching" | "done" | "error";
+type SyncState = "idle" | "syncing" | "done" | "error";
 
 interface SyncData {
   fetched: number;
@@ -42,12 +42,6 @@ export default function SyncButton({
     es.addEventListener("progress", (e: MessageEvent) => {
       const d: SyncData = JSON.parse(e.data);
       setData(d);
-    });
-
-    es.addEventListener("matching", (e: MessageEvent) => {
-      const d = JSON.parse(e.data);
-      setData((prev) => ({ ...prev, message: d.message ?? "Matching trails…" }));
-      setSyncState("matching");
     });
 
     es.addEventListener("done", (e: MessageEvent) => {
@@ -100,7 +94,7 @@ export default function SyncButton({
       )}
 
       {/* Syncing / matching progress */}
-      {(syncState === "syncing" || syncState === "matching") && (
+      {syncState === "syncing" && (
         <div className="mb-4">
           <div className="flex items-center justify-center gap-2 text-[#4A7C59] text-sm mb-3">
             <svg
@@ -156,7 +150,7 @@ export default function SyncButton({
       )}
 
       {/* Button */}
-      {syncState !== "syncing" && syncState !== "matching" && (
+      {syncState !== "syncing" && (
         <button
           onClick={startSync}
           className="w-full flex items-center justify-center gap-2 bg-white hover:bg-[#FAF8F5] border border-[#E5DED4] hover:border-[#C4652A]/40 text-[#2C2520] text-sm font-medium py-2.5 px-4 rounded-xl transition-all duration-150"

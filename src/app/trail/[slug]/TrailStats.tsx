@@ -2,6 +2,7 @@
 
 import { useDistanceUnit } from "@/app/DistanceUnitProvider";
 import { formatDist, unitLabel } from "@/lib/distance";
+import { useTrailSelection } from "./TrailSelectionContext";
 
 interface Activity {
   id: string;
@@ -11,6 +12,7 @@ interface Activity {
   activity_distance_m: number;
   strava_activity_id: string;
   trail_contribution_m: number;
+  activity_trail_geojson: object | null;
 }
 
 interface Props {
@@ -57,6 +59,7 @@ function StatCard({ label, value, highlight = false }: { label: string; value: s
 export default function TrailStats({ completedM, totalDistM, activityCount, pct, activities }: Props) {
   const { unit } = useDistanceUnit();
   const ul = unitLabel(unit);
+  const { selectedActivityId, selectActivity } = useTrailSelection();
 
   return (
     <>
@@ -84,39 +87,58 @@ export default function TrailStats({ completedM, totalDistM, activityCount, pct,
             Contributing Activities
           </h2>
           <div className="flex flex-col gap-2">
-            {activities.map((act) => (
-              <a
-                key={act.id}
-                href={`https://www.strava.com/activities/${act.strava_activity_id}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="bg-white hover:bg-[#FAF8F5] border border-[#E5DED4] rounded-xl px-4 py-3 transition-colors block"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-[#2C2520] text-sm font-medium truncate">{act.name}</p>
-                    <p className="text-[#8A7F72] text-xs mt-0.5">
-                      {CYCLING_TYPES.has(act.activity_type) && <BikeIcon />}
-                      {activityTypeLabel(act.activity_type)} · {formatDate(act.start_date)}
-                    </p>
+            {activities.map((act) => {
+              const isSelected = selectedActivityId === act.id;
+              return (
+                <div
+                  key={act.id}
+                  onClick={() =>
+                    selectActivity(
+                      isSelected ? null : act.id,
+                      isSelected ? null : act.activity_trail_geojson
+                    )
+                  }
+                  className={`border rounded-xl px-4 py-3 transition-colors cursor-pointer ${
+                    isSelected
+                      ? "bg-[#FDF6F2] border-[#C4652A]/50"
+                      : "bg-white hover:bg-[#FAF8F5] border-[#E5DED4]"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-[#2C2520] text-sm font-medium truncate">{act.name}</p>
+                      <p className="text-[#8A7F72] text-xs mt-0.5">
+                        {CYCLING_TYPES.has(act.activity_type) && <BikeIcon />}
+                        {activityTypeLabel(act.activity_type)} · {formatDate(act.start_date)}
+                      </p>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className={`text-sm font-semibold tabular-nums ${isSelected ? "text-[#C4652A]" : "text-[#4A7C59]"}`}>
+                        +{formatDist(act.trail_contribution_m, unit)} {ul}
+                      </p>
+                      <p className="text-[#8A7F72] text-xs">of trail</p>
+                    </div>
                   </div>
-                  <div className="text-right shrink-0">
-                    <p className="text-[#4A7C59] text-sm font-semibold tabular-nums">
-                      +{formatDist(act.trail_contribution_m, unit)} {ul}
+                  <div className="flex items-center justify-between mt-2">
+                    <p className="text-[#8A7F72]/70 text-xs">
+                      Activity total: {formatDist(act.activity_distance_m, unit)} {ul}
                     </p>
-                    <p className="text-[#8A7F72] text-xs">of trail</p>
+                    <a
+                      href={`https://www.strava.com/activities/${act.strava_activity_id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className="text-[#8A7F72]/40 hover:text-[#C4652A]/60 transition-colors"
+                      title="Open on Strava"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3">
+                        <path fillRule="evenodd" d="M4.22 11.78a.75.75 0 010-1.06L9.44 5.5H5.75a.75.75 0 010-1.5h5.5a.75.75 0 01.75.75v5.5a.75.75 0 01-1.5 0V6.56l-5.22 5.22a.75.75 0 01-1.06 0z" clipRule="evenodd" />
+                      </svg>
+                    </a>
                   </div>
                 </div>
-                <div className="flex items-center justify-between mt-2">
-                  <p className="text-[#8A7F72]/70 text-xs">
-                    Activity total: {formatDist(act.activity_distance_m, unit)} {ul}
-                  </p>
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3 text-[#8A7F72]/40">
-                    <path fillRule="evenodd" d="M4.22 11.78a.75.75 0 010-1.06L9.44 5.5H5.75a.75.75 0 010-1.5h5.5a.75.75 0 01.75.75v5.5a.75.75 0 01-1.5 0V6.56l-5.22 5.22a.75.75 0 01-1.06 0z" clipRule="evenodd" />
-                  </svg>
-                </div>
-              </a>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
