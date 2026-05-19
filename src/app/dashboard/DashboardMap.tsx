@@ -117,7 +117,7 @@ export default function DashboardMap({ trails, selectedSlug, onTrailClick }: Pro
   useEffect(() => {
     const hasSelection = selectedSlug !== null;
 
-    for (const [slug, { base, completed }] of layersRef.current.entries()) {
+    for (const [slug, { base, completed }] of Array.from(layersRef.current.entries())) {
       const isSelected = slug === selectedSlug;
 
       base.setStyle({
