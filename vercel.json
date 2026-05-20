@@ -1,3 +1,11 @@
 {
-  "regions": ["lhr1"]
+  "regions": ["lhr1"],
+  "functions": {
+    "src/app/api/sync/activities/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/update-descriptions/route.ts": {
+      "maxDuration": 60
+    }
+  }
 }

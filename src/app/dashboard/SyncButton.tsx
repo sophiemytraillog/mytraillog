@@ -62,13 +62,8 @@ export default function SyncButton({
     });
 
     es.onerror = () => {
-      setSyncState((prev) => {
-        if (prev === "done") return prev;
-        return "error";
-      });
-      setData((prev) =>
-        prev.message ? prev : { ...prev, message: "Connection lost" }
-      );
+      setSyncState((prev) => (prev === "done" ? prev : "error"));
+      setData((prev) => ({ ...prev, message: "Connection lost — please retry" }));
       es.close();
     };
   };
