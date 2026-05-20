@@ -10,7 +10,7 @@ export const pool =
     // We deliberately avoid `connectionString` because the password contains
     // literal % characters that pg-connection-string would try to URL-decode.
     ssl: { rejectUnauthorized: false },
-    max: 10,
+    max: process.env.NODE_ENV === "production" ? 1 : 10,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
   });
