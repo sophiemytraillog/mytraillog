@@ -6,9 +6,11 @@ const globalForPg = globalThis as unknown as { _pgPool?: Pool };
 export const pool =
   globalForPg._pgPool ??
   new Pool({
-    // Uses PGHOST / PGPORT / PGDATABASE / PGUSER / PGPASSWORD env vars.
-    // We deliberately avoid `connectionString` because the password contains
-    // literal % characters that pg-connection-string would try to URL-decode.
+    host:     process.env.PGHOST,
+    port:     parseInt(process.env.PGPORT ?? "5432"),
+    database: process.env.PGDATABASE,
+    user:     process.env.PGUSER,
+    password: process.env.PGPASSWORD,
     ssl: { rejectUnauthorized: false },
     max: process.env.NODE_ENV === "production" ? 1 : 10,
     idleTimeoutMillis: 30_000,
