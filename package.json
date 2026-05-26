@@ -25,6 +25,7 @@
     "react-dom": "^18"
   },
   "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "@types/mapbox__polyline": "^1.0.5",
     "@types/node": "^20",
     "@types/pg": "^8.20.0",

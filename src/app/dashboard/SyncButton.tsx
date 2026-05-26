@@ -126,6 +126,17 @@ export default function SyncButton({
               {data.fetched} fetched · {data.saved} saved
             </p>
           )}
+
+          <button
+            onClick={() => {
+              esRef.current?.close();
+              setSyncState("idle");
+              setData({ fetched: 0, saved: 0, message: "" });
+            }}
+            className="mt-3 w-full text-xs text-[#8A7F72] hover:text-[#2C2520] underline underline-offset-2 transition-colors"
+          >
+            Stop
+          </button>
         </div>
       )}
 

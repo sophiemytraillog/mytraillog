@@ -130,7 +130,7 @@ export async function writeTrailDescription(
   // Strip any existing My Trail Log block — handles old format (with 🥾 header) and new format (trail lines + mytraillog.com)
   const baseDesc = currentDesc
     .replace(/\n\n🥾 My Trail Log[\s\S]*$/, "")
-    .replace(/\n\n(?:[^\n]+: \d+\.\d+km[^\n]*\n)+mytraillog\.com[^\n]*$/, "")
+    .replace(/\n\n(?:[^\n]+: \d+\.\d+km[^\n]*\n)+mytraillog\.\S+[^\n]*$/, "")
     .trimEnd();
   const newDesc = baseDesc + buildTrailBlock(matches);
 

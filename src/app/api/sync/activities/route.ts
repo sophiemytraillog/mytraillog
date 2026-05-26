@@ -59,12 +59,13 @@ export async function GET(request: NextRequest) {
 
       let fetched = 0;
       let saved = 0;
+      const newDbIds: string[] = [];
 
       try {
         const accessToken = await getValidAccessToken(userId);
 
-        const { rows: [userPrefs] } = await pool.query<{ include_cycling: boolean; strava_description_updates: boolean }>(
-          "SELECT include_cycling, strava_description_updates FROM users WHERE id = $1",
+        const { rows: [userPrefs] } = await pool.query<{ include_cycling: boolean }>(
+          "SELECT include_cycling FROM users WHERE id = $1",
           [userId]
         );
         const allowedTypes = userPrefs?.include_cycling
@@ -73,8 +74,8 @@ export async function GET(request: NextRequest) {
         console.log("[sync] Got valid access token");
 
         // Saves a page of Strava activities; returns how many were newly inserted.
-        // onNew is called with the Strava activity ID for each newly saved activity.
-        const savePage = async (activities: StravaActivity[], onNew?: (id: number) => void): Promise<number> => {
+        // onNew is called with the DB uuid for each newly saved activity.
+        const savePage = async (activities: StravaActivity[], onNew?: (dbId: string) => void): Promise<number> => {
           let pageNew = 0;
           for (const activity of activities) {
             const type = activity.sport_type || activity.type;
@@ -83,20 +84,21 @@ export async function GET(request: NextRequest) {
               continue;
             }
             const wkt = decodePolylineToWKT(activity.map?.summary_polyline);
-            const result = await pool.query(
+            const result = await pool.query<{ id: string }>(
               `INSERT INTO activities (
                  user_id, strava_activity_id, name, activity_type,
                  distance, moving_time, start_date, polyline, geometry
                ) VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz, $8,
                  ST_GeomFromText($9, 4326))
-               ON CONFLICT (strava_activity_id) DO NOTHING`,
+               ON CONFLICT (strava_activity_id) DO NOTHING
+               RETURNING id`,
               [
                 userId, activity.id, activity.name, type,
                 activity.distance, activity.moving_time, activity.start_date,
                 activity.map?.summary_polyline ?? null, wkt,
               ]
             );
-            if ((result.rowCount ?? 0) > 0) { pageNew++; onNew?.(activity.id); }
+            if ((result.rowCount ?? 0) > 0) { pageNew++; onNew?.(result.rows[0].id); }
           }
           return pageNew;
         };
@@ -156,7 +158,7 @@ export async function GET(request: NextRequest) {
           if (activities.length === 0) break;
 
           fetched += activities.length;
-          saved += await savePage(activities);
+          saved += await savePage(activities, (dbId) => newDbIds.push(dbId));
           send("progress", { fetched, saved, message: `Syncing… ${fetched} fetched, ${saved} saved` });
           if (activities.length < PER_PAGE) break;
         }
@@ -180,7 +182,7 @@ export async function GET(request: NextRequest) {
             if (activities.length === 0) break;
 
               fetched += activities.length;
-            saved += await savePage(activities);
+            saved += await savePage(activities, (dbId) => newDbIds.push(dbId));
             send("progress", { fetched, saved, message: `Backfilling… ${fetched} fetched, ${saved} saved` });
 
             // Advance cursor to just before the oldest activity on this page
@@ -217,36 +219,33 @@ export async function GET(request: NextRequest) {
           console.error("[sync/activities] Trail matching error:", matchErr);
         }
 
-        // Description updates — likewise runs in the background after done.
-        let descUpdated = 0;
-        if (userPrefs?.strava_description_updates) {
-          const { rows: toUpdate } = await pool.query<{ id: string; strava_activity_id: string; name: string }>(
-            `SELECT id, strava_activity_id::text, name
+        // Description updates — auto-run for any activities newly saved in this sync.
+        if (newDbIds.length > 0) {
+          const { rows: toUpdate } = await pool.query<{ id: string; strava_activity_id: string }>(
+            `SELECT id, strava_activity_id::text
              FROM activities
-             WHERE user_id = $1
+             WHERE id = ANY($1::uuid[])
                AND geometry IS NOT NULL
-               AND strava_description_updated = FALSE
-             ORDER BY start_date DESC`,
-            [userId]
+               AND strava_description_updated = FALSE`,
+            [newDbIds]
           );
-          if (toUpdate.length > 0) {
-            for (const act of toUpdate) {
-              try {
-                const matches = await getActivityTrailMatches(userId, act.id);
-                if (matches.length > 0) {
-                  const updated = await writeTrailDescription(userId, act.id, parseInt(act.strava_activity_id), matches);
-                  if (updated) descUpdated++;
-                }
-              } catch (err) {
-                if (err instanceof ScopeError) {
-                  console.warn("[sync] Scope error updating description — skipping remaining:", err.message);
-                  break;
-                }
-                console.error("[sync] Description update error:", err);
+          let descUpdated = 0;
+          for (const act of toUpdate) {
+            try {
+              const matches = await getActivityTrailMatches(userId, act.id);
+              if (matches.length > 0) {
+                const updated = await writeTrailDescription(userId, act.id, parseInt(act.strava_activity_id), matches);
+                if (updated) descUpdated++;
               }
+            } catch (err) {
+              if (err instanceof ScopeError) {
+                console.warn("[sync] Scope error updating description — skipping:", err.message);
+                break;
+              }
+              console.error("[sync] Description update error:", err);
             }
           }
-          console.log(`[sync] Description updates complete: ${descUpdated} updated`);
+          if (descUpdated > 0) console.log(`[sync] Description updates complete: ${descUpdated} updated`);
         }
       } catch (err) {
         const message =

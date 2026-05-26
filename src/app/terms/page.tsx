@@ -47,123 +47,213 @@ export default function TermsPage() {
               Legal
             </div>
             <h1 className="text-3xl font-extrabold text-[#2C2520] tracking-tight mb-2">Terms of Service</h1>
-            <p className="text-[#8A7F72] text-sm">Last updated: 7 May 2026</p>
+            <p className="text-[#8A7F72] text-sm">Last updated: 26 May 2026</p>
           </div>
 
-          <Section title="Acceptance of terms">
+          <Section title="1. Acceptance of terms">
             <p>
-              By connecting your Strava account and using My Trail Log (&ldquo;the service&rdquo;, &ldquo;we&rdquo;,
-              &ldquo;us&rdquo;), you agree to these Terms of Service. If you do not agree, please do not use the service.
+              By creating an account or using My Trail Log (&ldquo;the Service&rdquo;, &ldquo;we&rdquo;,
+              &ldquo;us&rdquo;, &ldquo;our&rdquo;), you agree to be bound by these Terms of Service
+              (&ldquo;Terms&rdquo;). Please read them carefully before using the Service. If you do not
+              agree to these Terms, you must not use the Service.
             </p>
             <p>
-              My Trail Log is a personal project, not a commercial product. It is provided free of charge
-              and on a best-efforts basis.
-            </p>
-          </Section>
-
-          <Section title="What the service does">
-            <p>
-              My Trail Log connects to your Strava account (with your permission), reads your activity GPS data,
-              and compares it against the official routes of Britain&apos;s long-distance trails. It shows you
-              which sections of each trail you have covered and calculates your overall progress.
-            </p>
-            <p>
-              Optionally, with additional Strava write permission, the service can append trail progress
-              information to the descriptions of your Strava activities.
+              We reserve the right to update these Terms at any time. We will notify you of material
+              changes by updating the date at the top of this page. Continued use of the Service after
+              changes are posted constitutes your acceptance of the revised Terms.
             </p>
           </Section>
 
-          <Section title="Strava account requirement">
+          <Section title="2. About My Trail Log">
             <p>
-              The service requires a valid Strava account. You must comply with{" "}
+              My Trail Log is a trail tracking platform that connects to your Strava account, analyses
+              your GPS activity data, and tracks your progress along Britain&apos;s long-distance trails.
+              The Service shows which sections of each trail you have covered and calculates your overall
+              completion percentage.
+            </p>
+            <p>
+              Optionally, with your permission, the Service can append trail progress information to the
+              descriptions of your Strava activities.
+            </p>
+            <p>
+              My Trail Log may offer both free and paid subscription tiers. Features available on each
+              tier are described on the Service and may change over time.
+            </p>
+          </Section>
+
+          <Section title="3. User responsibilities">
+            <p>
+              To use the Service you must connect a valid Strava account. You are responsible for
+              maintaining the security of your account and for all activity that occurs under it.
+            </p>
+            <p>
+              You must comply with{" "}
               <a href="https://www.strava.com/legal/terms" target="_blank" rel="noopener noreferrer" className="text-[#C4652A] underline hover:no-underline">
                 Strava&apos;s Terms of Service
               </a>{" "}
-              when using My Trail Log. We are not affiliated with or endorsed by Strava, Inc.
-            </p>
-            <p>
-              Access to your Strava data is controlled entirely by Strava&apos;s OAuth system. You can revoke
-              access at any time from your{" "}
+              at all times. My Trail Log is not affiliated with or endorsed by Strava, Inc. You can
+              revoke the Service&apos;s access to your Strava account at any time via your{" "}
               <a href="https://www.strava.com/settings/apps" target="_blank" rel="noopener noreferrer" className="text-[#C4652A] underline hover:no-underline">
                 Strava connected apps settings
               </a>.
             </p>
+            <p>
+              You must provide accurate information where requested and must not impersonate any person
+              or misrepresent your identity or affiliation.
+            </p>
           </Section>
 
-          <Section title="Acceptable use">
-            <p>You agree to use the service only for its intended purpose — tracking your personal trail progress. You must not:</p>
+          <Section title="4. Acceptable use">
+            <p>
+              You agree to use the Service only for lawful purposes and in accordance with these Terms.
+              You must not:
+            </p>
             <ul className="list-disc list-inside space-y-1.5 pl-2">
-              <li>Attempt to access other users&apos; data.</li>
-              <li>Use the service to scrape, harvest, or aggregate trail or activity data for any other purpose.</li>
-              <li>Attempt to overload, disrupt, or reverse-engineer the service.</li>
-              <li>Use automated scripts or bots to interact with the service.</li>
+              <li>Attempt to access, query, or interfere with another user&apos;s data or account.</li>
+              <li>Scrape, harvest, copy, or republish trail data, activity data, or any other content from the Service for any purpose outside your personal use.</li>
+              <li>Use automated scripts, bots, or crawlers to interact with the Service.</li>
+              <li>Attempt to overload, disrupt, reverse-engineer, or compromise the security of the Service or its infrastructure.</li>
+              <li>Use the Service in any way that violates applicable local, national, or international law or regulation.</li>
+              <li>Transmit any material that is unlawful, defamatory, or otherwise objectionable.</li>
             </ul>
+            <p>
+              We reserve the right to suspend or terminate access for any user who breaches these rules.
+            </p>
           </Section>
 
-          <Section title="Accuracy of trail data">
+          <Section title="5. Intellectual property">
+            <p>
+              The Service, including its software, design, trail matching algorithms, and all content
+              produced by My Trail Log, is owned by or licensed to us and is protected by copyright and
+              other intellectual property laws. Nothing in these Terms grants you any right to use our
+              name, logo, or branding.
+            </p>
+            <p>
+              Trail route data is derived from publicly available geographic datasets. My Trail Log does
+              not claim ownership of underlying trail routes or any third-party data sources. Activity
+              data accessed via Strava remains subject to Strava&apos;s terms and your rights as a Strava user.
+            </p>
+            <p>
+              You retain all rights to your personal activity data. By using the Service, you grant us
+              a limited licence to process that data solely for the purpose of providing the Service to you.
+            </p>
+          </Section>
+
+          <Section title="6. Accuracy of trail data">
             <p>
               Trail route data is sourced from publicly available geographical datasets. While we aim
-              for accuracy, we cannot guarantee that the trail geometry precisely matches the current
-              on-the-ground route of any trail. Routes change over time due to diversions, seasonal closures,
-              and land access agreements.
+              for accuracy, we cannot guarantee that trail geometry precisely matches the current
+              on-the-ground route of any trail. Routes change over time due to diversions, seasonal
+              closures, and land access agreements.
             </p>
             <p>
               Progress calculations are estimates based on GPS data and a 50-metre matching tolerance.
-              They should not be used as a definitive record of completion for any official challenge or
-              event. Always follow the official route guidance for the trail you are walking.
+              They should not be treated as a definitive record of completion for any official challenge
+              or event. Always follow the official route guidance for the trail you are undertaking.
+              The Service is not a substitute for appropriate navigation equipment, maps, or experience.
             </p>
           </Section>
 
-          <Section title="Privacy">
+          <Section title="7. Subscription and payment terms">
             <p>
-              Your use of the service is also governed by our{" "}
+              My Trail Log currently offers a free tier that provides access to core trail tracking
+              features. Paid subscription tiers with additional features are coming soon.
+            </p>
+            <p>
+              When paid subscriptions are introduced, the following terms will apply:
+            </p>
+            <ul className="list-disc list-inside space-y-1.5 pl-2">
+              <li>Subscription fees will be charged in advance on a recurring basis (monthly or annual, depending on the plan selected).</li>
+              <li>All fees are stated inclusive or exclusive of VAT as indicated at the point of purchase.</li>
+              <li>You may cancel your subscription at any time. Cancellation takes effect at the end of the current billing period; no partial refunds are issued for unused time unless required by law.</li>
+              <li>We reserve the right to change subscription pricing with reasonable notice. Price changes will not affect your current billing period.</li>
+              <li>If a payment fails, we may suspend access to paid features until payment is resolved.</li>
+            </ul>
+            <p>
+              Nothing in this section affects any statutory rights you have as a consumer under
+              applicable law, including rights under the Consumer Rights Act 2015.
+            </p>
+          </Section>
+
+          <Section title="8. Privacy">
+            <p>
+              Your use of the Service is governed by our{" "}
               <Link href="/privacy" className="text-[#C4652A] underline hover:no-underline">Privacy Policy</Link>,
-              which describes how we collect, store, and use your data.
+              which describes how we collect, store, and process your personal data. By using the Service,
+              you acknowledge that you have read and understood our Privacy Policy.
             </p>
           </Section>
 
-          <Section title="Disclaimers">
+          <Section title="9. Disclaimers">
             <p>
-              The service is provided &ldquo;as is&rdquo; without warranty of any kind. We do not guarantee
-              that it will be available at all times, error-free, or that progress calculations will be
-              perfectly accurate.
+              The Service is provided &ldquo;as is&rdquo; and &ldquo;as available&rdquo; without warranty
+              of any kind, whether express or implied, including but not limited to implied warranties of
+              merchantability, fitness for a particular purpose, or non-infringement. We do not warrant
+              that the Service will be uninterrupted, error-free, or free of harmful components.
             </p>
             <p>
-              Trail progress shown in the service is for personal reference only. It is not a substitute
-              for navigation equipment, proper trail maps, or physical fitness assessment. Always plan
-              outdoor activities appropriately and follow the Countryside Code.
-            </p>
-          </Section>
-
-          <Section title="Limitation of liability">
-            <p>
-              To the fullest extent permitted by law, My Trail Log shall not be liable for any indirect,
-              incidental, or consequential damages arising from your use of the service, including but
-              not limited to loss of data, incorrect trail progress calculations, or reliance on the
-              service for navigation.
+              Trail progress data is provided for personal reference only and must not be relied upon
+              for navigation, safety decisions, or as evidence of completion for any official challenge
+              or award scheme.
             </p>
           </Section>
 
-          <Section title="Changes to these terms">
+          <Section title="10. Limitation of liability">
             <p>
-              We may update these terms from time to time. We will update the &ldquo;Last updated&rdquo;
-              date at the top of this page when we do. Continued use of the service after changes
-              constitutes acceptance of the revised terms.
+              To the fullest extent permitted by applicable law, My Trail Log and its operators shall
+              not be liable for any indirect, incidental, special, consequential, or punitive damages
+              arising out of or in connection with your use of, or inability to use, the Service. This
+              includes but is not limited to loss of data, loss of profit, incorrect trail progress
+              calculations, or any reliance on the Service for navigation or safety purposes.
+            </p>
+            <p>
+              Where liability cannot be excluded by law, our total aggregate liability to you in respect
+              of any claim arising under or in connection with these Terms shall not exceed the total
+              fees paid by you to us in the twelve months preceding the event giving rise to the claim,
+              or £100, whichever is greater.
+            </p>
+            <p>
+              Nothing in these Terms excludes or limits liability for death or personal injury caused
+              by negligence, fraud or fraudulent misrepresentation, or any other liability that cannot
+              lawfully be excluded.
             </p>
           </Section>
 
-          <Section title="Governing law">
+          <Section title="11. Modification and discontinuation of the service">
             <p>
-              These terms are governed by the laws of England and Wales. Any disputes will be subject
-              to the exclusive jurisdiction of the courts of England and Wales.
+              We reserve the right to modify, suspend, or discontinue the Service (or any part of it)
+              at any time, with or without notice. We may also introduce, change, or remove features,
+              including moving features between free and paid tiers.
+            </p>
+            <p>
+              Where we discontinue a paid subscription tier, we will provide reasonable advance notice
+              and offer a pro-rata refund for any prepaid subscription period that cannot be fulfilled.
+            </p>
+            <p>
+              We shall not be liable to you or any third party for any modification, suspension, or
+              discontinuation of the Service.
             </p>
           </Section>
 
-          <Section title="Contact">
+          <Section title="12. Governing law and disputes">
             <p>
-              Questions about these terms can be sent to{" "}
-              <a href="mailto:privacy@mytraillog.app" className="text-[#C4652A] underline hover:no-underline">
-                privacy@mytraillog.app
+              These Terms and any dispute or claim arising out of or in connection with them (including
+              non-contractual disputes) shall be governed by and construed in accordance with the laws
+              of England and Wales.
+            </p>
+            <p>
+              You and we both agree to submit to the exclusive jurisdiction of the courts of England
+              and Wales to resolve any legal dispute arising in connection with these Terms, unless
+              you are a consumer resident in Scotland or Northern Ireland, in which case you may also
+              bring proceedings in the courts of your country of residence.
+            </p>
+          </Section>
+
+          <Section title="13. Contact">
+            <p>
+              If you have any questions about these Terms or the Service, please contact us at{" "}
+              <a href="mailto:mytrailloguk@gmail.com" className="text-[#C4652A] underline hover:no-underline">
+                mytrailloguk@gmail.com
               </a>.
             </p>
           </Section>

@@ -52,7 +52,7 @@ export default function PrivacyPage() {
 
           <Section title="Overview">
             <p>
-              My Trail Log (&ldquo;we&rdquo;, &ldquo;us&rdquo;, &ldquo;our&rdquo;) is a personal project that helps
+              My Trail Log (&ldquo;we&rdquo;, &ldquo;us&rdquo;, &ldquo;our&rdquo;) is a trail tracking service that helps
               you track your progress along Britain&apos;s long-distance trails using your Strava activity data.
               This policy explains what data we collect, how we use it, and your rights regarding it.
             </p>
@@ -165,8 +165,8 @@ export default function PrivacyPage() {
           <Section title="Requesting deletion">
             <p>
               To delete your account and all associated data, email us at{" "}
-              <a href="mailto:privacy@mytraillog.app" className="text-[#C4652A] underline hover:no-underline">
-                privacy@mytraillog.app
+              <a href="mailto:mytrailloguk@gmail.com" className="text-[#C4652A] underline hover:no-underline">
+                mytrailloguk@gmail.com
               </a>{" "}
               with the subject line <span className="font-medium text-[#2C2520]">Delete my account</span> and
               include your Strava username or email address so we can identify your account.
@@ -179,8 +179,8 @@ export default function PrivacyPage() {
           <Section title="Contact">
             <p>
               If you have any questions about this privacy policy or how we handle your data, please email{" "}
-              <a href="mailto:privacy@mytraillog.app" className="text-[#C4652A] underline hover:no-underline">
-                privacy@mytraillog.app
+              <a href="mailto:mytrailloguk@gmail.com" className="text-[#C4652A] underline hover:no-underline">
+                mytrailloguk@gmail.com
               </a>.
             </p>
             <p>
