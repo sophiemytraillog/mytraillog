@@ -211,6 +211,7 @@ export default function PrivacyPage() {
           <div className="flex items-center gap-4 text-[#FAF8F5]/30 text-xs">
             <Link href="/privacy" className="hover:text-[#FAF8F5]/60 transition-colors">Privacy Policy</Link>
             <Link href="/terms" className="hover:text-[#FAF8F5]/60 transition-colors">Terms of Service</Link>
+            <Link href="/support" className="hover:text-[#FAF8F5]/60 transition-colors">Support</Link>
           </div>
         </div>
       </footer>
