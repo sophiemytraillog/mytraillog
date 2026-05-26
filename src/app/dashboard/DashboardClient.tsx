@@ -553,6 +553,7 @@ export default function DashboardClient({
           <div className="flex items-center gap-4 text-[#8A7F72]/60 text-xs">
             <a href="/privacy" className="hover:text-[#8A7F72] transition-colors">Privacy</a>
             <a href="/terms" className="hover:text-[#8A7F72] transition-colors">Terms</a>
+            <a href="/support" className="hover:text-[#8A7F72] transition-colors">Support</a>
           </div>
         </div>
       </footer>
