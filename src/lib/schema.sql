@@ -141,6 +141,28 @@ CREATE TABLE IF NOT EXISTS trail_requests (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- ── Row-Level Security ──────────────────────────────────────
+-- The server connects as the postgres role which has BYPASSRLS in Supabase,
+-- so all server-side queries are unaffected. These settings block direct
+-- client access via the anon/authenticated roles.
+ALTER TABLE users                      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE activities                 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE trails                     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_trail_progress        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_trail_manual_segments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE trail_requests             ENABLE ROW LEVEL SECURITY;
+
+-- Trails are public reference data — allow anyone to read them
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'trails' AND policyname = 'trails_select_public'
+  ) THEN
+    CREATE POLICY "trails_select_public" ON trails FOR SELECT USING (true);
+  END IF;
+END
+$$;
+
 -- ── updated_at trigger ───────────────────────────────────────
 CREATE OR REPLACE FUNCTION trigger_set_updated_at()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
