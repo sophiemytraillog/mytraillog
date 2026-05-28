@@ -63,6 +63,10 @@ export async function POST(req: Request) {
     await handleDeauth(event.object_id);
   } else if (event.object_type === "activity" && event.aspect_type === "create") {
     waitUntil(handleNewActivity(event.object_id, event.owner_id));
+  } else if (event.object_type === "activity" && event.aspect_type === "delete") {
+    waitUntil(handleDeletedActivity(event.object_id, event.owner_id));
+  } else if (event.object_type === "activity" && event.aspect_type === "update") {
+    waitUntil(handleUpdatedActivity(event.object_id, event.owner_id));
   }
 
   return new Response("EVENT_RECEIVED", { status: 200 });
@@ -81,6 +85,119 @@ async function handleDeauth(stravaAthleteId: number) {
   console.log(
     `[webhook/strava] Deleted ${rowCount ?? 0} user record(s) for athlete ${stravaAthleteId}`
   );
+}
+
+// ── Deleted activity ───────────────────────────────────────────────────────────
+// Removes the activity from our DB and recomputes trail progress for any trails
+// that were nearby, so completion percentages stay accurate.
+async function handleDeletedActivity(activityId: number, stravaAthleteId: number) {
+  console.log(`[webhook/strava] Delete activity ${activityId} for athlete ${stravaAthleteId}`);
+
+  try {
+    const { rows: [user] } = await pool.query<{ id: string }>(
+      "SELECT id FROM users WHERE strava_id = $1",
+      [stravaAthleteId]
+    );
+    if (!user) {
+      console.log(`[webhook/strava] Athlete ${stravaAthleteId} not in our DB — ignoring`);
+      return;
+    }
+
+    // Capture nearby trail IDs before deleting so we can do a targeted recompute
+    const { rows: nearbyTrails } = await pool.query<{ id: string }>(
+      `SELECT DISTINCT t.id
+       FROM trails t
+       JOIN activities a ON ST_DWithin(a.geometry::geography, t.geometry::geography, 50)
+       WHERE a.strava_activity_id = $1 AND a.user_id = $2 AND a.geometry IS NOT NULL`,
+      [activityId, user.id]
+    );
+    const trailIds = nearbyTrails.map(r => r.id);
+
+    const { rowCount } = await pool.query(
+      "DELETE FROM activities WHERE strava_activity_id = $1 AND user_id = $2",
+      [activityId, user.id]
+    );
+
+    if ((rowCount ?? 0) === 0) {
+      console.log(`[webhook/strava] Activity ${activityId} not in our DB — nothing to delete`);
+      return;
+    }
+
+    console.log(
+      `[webhook/strava] Deleted activity ${activityId}, recomputing ${trailIds.length} trail(s)…`
+    );
+    const matched = await computeTrailProgress(user.id, trailIds.length > 0 ? trailIds : undefined);
+    console.log(`[webhook/strava] Recompute complete — ${matched} trail(s) updated`);
+  } catch (err) {
+    console.error(`[webhook/strava] Error deleting activity ${activityId}:`, err);
+  }
+}
+
+// ── Updated activity ───────────────────────────────────────────────────────────
+// Handles metadata changes (name, type) and the case where Strava sends an
+// update event but the activity no longer exists (404) — treat that as a delete.
+async function handleUpdatedActivity(activityId: number, stravaAthleteId: number) {
+  console.log(`[webhook/strava] Update activity ${activityId} for athlete ${stravaAthleteId}`);
+
+  try {
+    const { rows: [user] } = await pool.query<{ id: string; include_cycling: boolean }>(
+      "SELECT id, include_cycling FROM users WHERE strava_id = $1",
+      [stravaAthleteId]
+    );
+    if (!user) return;
+
+    // Only act if we have this activity in our DB
+    const { rows: [existing] } = await pool.query<{ id: string }>(
+      "SELECT id FROM activities WHERE strava_activity_id = $1 AND user_id = $2",
+      [activityId, user.id]
+    );
+    if (!existing) {
+      console.log(`[webhook/strava] Activity ${activityId} not in our DB — ignoring update`);
+      return;
+    }
+
+    const accessToken = await getValidAccessToken(user.id);
+    const res = await fetch(
+      `https://www.strava.com/api/v3/activities/${activityId}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+
+    // 404 means the activity was deleted on Strava — remove it from our DB
+    if (res.status === 404) {
+      console.log(`[webhook/strava] Activity ${activityId} returned 404 — treating as delete`);
+      await handleDeletedActivity(activityId, stravaAthleteId);
+      return;
+    }
+
+    if (!res.ok) {
+      console.error(`[webhook/strava] Failed to fetch activity ${activityId}: HTTP ${res.status}`);
+      return;
+    }
+
+    const activity = await res.json();
+    const activityType: string = activity.sport_type || activity.type;
+    const allowedTypes = user.include_cycling
+      ? new Set([...Array.from(SYNC_ACTIVITY_TYPES), ...Array.from(CYCLING_ACTIVITY_TYPES)])
+      : SYNC_ACTIVITY_TYPES;
+
+    // Type changed to something we no longer track — delete it and recompute
+    if (!allowedTypes.has(activityType)) {
+      console.log(
+        `[webhook/strava] Activity ${activityId} type changed to "${activityType}" (not tracked) — deleting`
+      );
+      await handleDeletedActivity(activityId, stravaAthleteId);
+      return;
+    }
+
+    // Otherwise update the stored name and type in case they changed
+    await pool.query(
+      `UPDATE activities SET name = $1, activity_type = $2 WHERE strava_activity_id = $3 AND user_id = $4`,
+      [activity.name, activityType, activityId, user.id]
+    );
+    console.log(`[webhook/strava] Updated activity ${activityId} metadata (name/type)`);
+  } catch (err) {
+    console.error(`[webhook/strava] Error handling update for activity ${activityId}:`, err);
+  }
 }
 
 // ── New activity ───────────────────────────────────────────────────────────────
