@@ -161,6 +161,15 @@ export async function GET(request: NextRequest) {
 
               if (matches.length === 0) {
                 console.log(`[update-descriptions] Skipping ${i + 1}/${total} — no trail match: ${act.name}`);
+                // activity_trail_matches is a coarse candidate list (simplified
+                // trail geometry) — this activity was a false positive there.
+                // Mark it checked anyway so it doesn't keep reappearing at the
+                // front of the queue on every future run, blocking progress on
+                // the rest of the backlog.
+                await pool.query(
+                  "UPDATE activities SET strava_description_updated = TRUE WHERE id = $1",
+                  [act.id]
+                ).catch(() => {});
                 continue;
               }
 

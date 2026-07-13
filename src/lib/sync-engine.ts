@@ -243,6 +243,10 @@ export async function finishSync(
         if (matches.length > 0) {
           const updated = await writeTrailDescription(userId, act.id, parseInt(act.strava_activity_id), matches);
           if (updated) descUpdated++;
+        } else {
+          // Confirmed no trail overlap — mark checked so update-descriptions'
+          // backlog scan doesn't reprocess it later.
+          await pool.query("UPDATE activities SET strava_description_updated = TRUE WHERE id = $1", [act.id]).catch(() => {});
         }
       } catch (err) {
         if (err instanceof ScopeError) {
