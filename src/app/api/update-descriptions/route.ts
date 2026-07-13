@@ -94,7 +94,7 @@ export async function GET(request: NextRequest) {
         // Oldest first — so each run makes progress on historical backfill
         // rather than re-checking recent activities that are already updated.
         const { rows: activities } = await pool.query<{ id: string; strava_activity_id: string; name: string }>(
-          `SELECT DISTINCT a.id, a.strava_activity_id::text AS strava_activity_id, a.name
+          `SELECT DISTINCT a.id, a.strava_activity_id, a.name
            FROM activities a
            JOIN activity_trail_matches atm ON atm.activity_id = a.id
            WHERE a.user_id = $1
