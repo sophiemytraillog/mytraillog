@@ -10,10 +10,14 @@ import {
 export const dynamic = "force-dynamic";
 // Vercel Hobby plan hard-caps function duration at 60s — this cannot be
 // raised without a plan upgrade, and vercel.json enforces the same value.
-// The rate limiter below already exits gracefully well before that on any
-// single run; the daily cron sweep (src/app/api/cron/sync-sweep) catches up
-// whatever a power user's account doesn't get through in one pass.
+// The rate limiter and the time budget below both exit gracefully well
+// before that on any single run; the client picks up where it left off on
+// the next run because progress is checkpointed in the DB
+// (activities.strava_description_updated), not in memory.
 export const maxDuration = 60;
+// Leaves margin for the discovery query, the final SSE write, and the
+// stream close within the 60s ceiling.
+const TIME_BUDGET_MS = 45_000;
 
 // Sliding-window rate limiter: tracks each Strava API call and blocks until
 // there is budget remaining in the current 15-minute window.
@@ -80,43 +84,24 @@ export async function GET(request: NextRequest) {
       };
 
       try {
-        // Step 1: get the user's matched trail IDs (fast, no geometry).
-        const { rows: trailRows } = await pool.query<{ trail_id: string }>(
-          `SELECT trail_id FROM user_trail_progress
-           WHERE user_id = $1 AND completion_percentage > 0`,
-          [userId]
-        );
-        const trailIds = trailRows.map((r) => r.trail_id);
+        const startedAt = Date.now();
 
-        // Step 2: find activities near those trails in batches of 10.
-        // One big JOIN times out; small batches use the GIST index and stay fast.
-        // Per-batch try/catch means a slow batch is skipped rather than aborting.
-        const BATCH = 10;
-        const matched = new Map<string, { id: string; strava_activity_id: string; name: string }>();
-        for (let i = 0; i < trailIds.length; i += BATCH) {
-          const batch = trailIds.slice(i, i + BATCH);
-          try {
-            // Use geometry (not ::geography) so the GIST index on activities.geometry
-            // is used. 0.001 degrees ≈ 90 m — safe over-estimate of the 50 m buffer.
-            const { rows } = await pool.query<{ id: string; strava_activity_id: string; name: string }>(
-              `SELECT DISTINCT a.id, a.strava_activity_id::text AS strava_activity_id, a.name
-               FROM activities a
-               JOIN trails t ON t.id = ANY($2::uuid[])
-               WHERE a.user_id = $1
-                 AND a.geometry IS NOT NULL
-                 AND ($3 OR a.strava_description_updated = FALSE)
-                 AND ST_DWithin(a.geometry, t.geometry, 0.001)`,
-              [userId, batch, force]
-            );
-            for (const row of rows) matched.set(row.id, row);
-          } catch (batchErr) {
-            console.warn(`[update-descriptions] Batch ${i}–${i + BATCH} skipped:`, batchErr);
-          }
-        }
+        // Candidate activities come straight from the activity_trail_matches
+        // cache (populated by computeTrailProgress — see match-trails.ts) instead
+        // of re-running spatial queries against every matched trail on every
+        // request. That recompute used to take 5+ minutes for power users and
+        // blew Vercel's 60s cap before a single description could be written.
         // Oldest first — so each run makes progress on historical backfill
         // rather than re-checking recent activities that are already updated.
-        const activities = Array.from(matched.values())
-          .sort((a, b) => parseInt(a.strava_activity_id) - parseInt(b.strava_activity_id));
+        const { rows: activities } = await pool.query<{ id: string; strava_activity_id: string; name: string }>(
+          `SELECT DISTINCT a.id, a.strava_activity_id::text AS strava_activity_id, a.name
+           FROM activities a
+           JOIN activity_trail_matches atm ON atm.activity_id = a.id
+           WHERE a.user_id = $1
+             AND ($2 OR a.strava_description_updated = FALSE)
+           ORDER BY a.strava_activity_id ASC`,
+          [userId, force]
+        );
 
         const total = activities.length;
         send("start", { total, message: `Found ${total} activities near your trails…` });
@@ -134,6 +119,19 @@ export async function GET(request: NextRequest) {
         try {
           for (let i = 0; i < activities.length; i++) {
             if (request.signal.aborted) break;
+
+            // Stop well within Vercel's 60s ceiling and checkpoint — each activity
+            // that gets updated already flips strava_description_updated, so the
+            // next run's discovery query naturally picks up from here.
+            if (Date.now() - startedAt > TIME_BUDGET_MS) {
+              send("done", {
+                total,
+                updated,
+                errors,
+                message: `Time budget reached — ${updated} updated so far (${i} of ${total} checked). Run again to continue.`,
+              });
+              return;
+            }
 
             // Stop gracefully if the Strava rate limit is exhausted — writeTrailDescription
             // uses 2 slots per activity. Blocking here for 900 s would kill the function.

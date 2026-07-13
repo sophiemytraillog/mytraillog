@@ -136,6 +136,31 @@ ALTER TABLE activities ADD COLUMN IF NOT EXISTS strava_description_updated BOOLE
 -- (sync_status = 'syncing' but this timestamp has gone stale).
 ALTER TABLE users ADD COLUMN IF NOT EXISTS sync_progress_at TIMESTAMPTZ;
 
+-- Marks when computeTrailProgress last populated activity_trail_matches for
+-- this (user, trail) pair — lets the backfill script (and future reruns)
+-- skip pairs that are already done instead of recomputing them.
+ALTER TABLE user_trail_progress ADD COLUMN IF NOT EXISTS activity_matches_computed_at TIMESTAMPTZ;
+
+-- Cached candidate list for description updates: which activities sit near
+-- which matched trails. Populated incrementally by computeTrailProgress
+-- (see src/lib/match-trails.ts) so update-descriptions/route.ts can look
+-- this up directly instead of re-running spatial queries against every
+-- matched trail on every request — that recompute was what made the
+-- discovery step take 5+ minutes for power users and blow Vercel's 60s cap.
+-- A coarse (simplified-geometry) candidate list is fine here: the exact
+-- per-activity trail overlap is still verified by getActivityTrailMatches
+-- at write time, so a false-positive candidate just costs one skipped check.
+CREATE TABLE IF NOT EXISTS activity_trail_matches (
+  activity_id UUID        NOT NULL REFERENCES activities(id) ON DELETE CASCADE,
+  trail_id    UUID        NOT NULL REFERENCES trails(id) ON DELETE CASCADE,
+  user_id     UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (activity_id, trail_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_activity_trail_matches_user_id
+  ON activity_trail_matches (user_id);
+
 CREATE TABLE IF NOT EXISTS trail_requests (
   id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id    UUID REFERENCES users(id) ON DELETE SET NULL,
@@ -156,6 +181,7 @@ ALTER TABLE trails                     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_trail_progress        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_trail_manual_segments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trail_requests             ENABLE ROW LEVEL SECURITY;
+ALTER TABLE activity_trail_matches     ENABLE ROW LEVEL SECURITY;
 
 -- Trails are public reference data — allow anyone to read them
 DO $$
@@ -168,18 +194,33 @@ BEGIN
 END
 $$;
 
--- spatial_ref_sys is a PostGIS extension table (coordinate system definitions).
--- Must be run as a superuser (e.g. via Supabase SQL Editor) — the app role
--- cannot ALTER a table it does not own.
-ALTER TABLE spatial_ref_sys ENABLE ROW LEVEL SECURITY;
+-- spatial_ref_sys is a PostGIS extension table (coordinate system definitions),
+-- owned by the extension rather than the app role, so ALTER fails with
+-- insufficient_privilege on Supabase's non-superuser app connection. Caught
+-- here so it doesn't abort the rest of this script (schema.sql runs as one
+-- implicit transaction via migrate.mjs) — apply it manually via the Supabase
+-- SQL Editor (as a superuser) if you need RLS enforced on this table too.
 DO $$
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_policies WHERE tablename = 'spatial_ref_sys' AND policyname = 'spatial_ref_sys_select_public'
-  ) THEN
-    CREATE POLICY "spatial_ref_sys_select_public"
-      ON spatial_ref_sys FOR SELECT USING (true);
-  END IF;
+  BEGIN
+    ALTER TABLE spatial_ref_sys ENABLE ROW LEVEL SECURITY;
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'Skipping spatial_ref_sys RLS — requires superuser; apply manually via Supabase SQL Editor';
+  END;
+END
+$$;
+DO $$
+BEGIN
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_policies WHERE tablename = 'spatial_ref_sys' AND policyname = 'spatial_ref_sys_select_public'
+    ) THEN
+      CREATE POLICY "spatial_ref_sys_select_public"
+        ON spatial_ref_sys FOR SELECT USING (true);
+    END IF;
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'Skipping spatial_ref_sys policy — requires superuser; apply manually via Supabase SQL Editor';
+  END;
 END
 $$;
 

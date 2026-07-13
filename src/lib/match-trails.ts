@@ -78,6 +78,22 @@ const MATCH_SQL = `
     updated_at            = NOW()
   RETURNING trail_id`;
 
+// Populates the description-update candidate cache (see schema.sql) for a
+// trail that just got a coverage row. Same simplified-geometry pre-filter as
+// combined_buffer above — a coarse candidate list is fine here because
+// getActivityTrailMatches re-verifies the exact overlap at write time.
+const ACTIVITY_MATCH_SQL = `
+  INSERT INTO activity_trail_matches (activity_id, trail_id, user_id)
+  SELECT DISTINCT a.id, $2::uuid, $1::uuid
+  FROM activities a
+  CROSS JOIN (SELECT ST_SimplifyPreserveTopology(geometry, 0.001) AS geometry
+              FROM trails WHERE id = $2::uuid) t_simplified
+  WHERE a.user_id = $1::uuid
+    AND a.geometry IS NOT NULL
+    AND ($3::boolean OR a.activity_type <> ALL($4::text[]))
+    AND ST_DWithin(a.geometry::geography, t_simplified.geometry::geography, ${BUFFER_METRES + SIMPLIFY_MARGIN})
+  ON CONFLICT (activity_id, trail_id) DO NOTHING`;
+
 export async function computeTrailProgress(userId: string, trailIds?: string[]): Promise<number> {
   const { rows: [userPrefs] } = await pool.query<{ include_cycling: boolean }>(
     "SELECT include_cycling FROM users WHERE id = $1",
@@ -116,7 +132,23 @@ export async function computeTrailProgress(userId: string, trailIds?: string[]):
         cyclingTypes,
       ]);
       await client.query("COMMIT");
-      if ((result.rowCount ?? 0) > 0) matched++;
+
+      if ((result.rowCount ?? 0) > 0) {
+        matched++;
+        try {
+          await client.query("BEGIN");
+          await client.query("SET LOCAL statement_timeout = '180000'"); // 3 min — some trails (e.g. South West Coast Path) are huge
+          await client.query(ACTIVITY_MATCH_SQL, [userId, trail.id, includeCycling, cyclingTypes]);
+          await client.query(
+            "UPDATE user_trail_progress SET activity_matches_computed_at = NOW() WHERE user_id = $1 AND trail_id = $2",
+            [userId, trail.id]
+          );
+          await client.query("COMMIT");
+        } catch (err) {
+          console.error(`[match-trails] activity_trail_matches for trail ${trail.id} failed:`, err);
+          await client.query("ROLLBACK").catch(() => {});
+        }
+      }
     } catch (err) {
       console.error(`[match-trails] Trail ${trail.id} failed:`, err);
       await client.query("ROLLBACK").catch(() => {});
