@@ -1,11 +1,18 @@
 import { pool } from "@/lib/db";
+import { CYCLING_ACTIVITY_TYPES } from "@/lib/strava";
 
 const BUFFER_METRES = 50;
+// ST_SimplifyPreserveTopology(geom, 0.001) can move points by up to ~111 m.
+// Use a wider pre-filter so activities near the real trail aren't excluded by
+// the simplified geometry cutting across headlands or tight coastal bends.
+const SIMPLIFY_MARGIN = 200;
 
 const MATCH_SQL = `
   WITH
   -- Union all activity buffers into one polygon so overlapping runs don't double-count.
   -- Uses simplified trail for the spatial filter only (performance) — NOT for geometry output.
+  -- Pre-filter uses BUFFER_METRES + SIMPLIFY_MARGIN to account for simplification distortion;
+  -- the actual 50 m buffer (ST_Buffer below) determines what counts as "on the trail".
   combined_buffer AS (
     SELECT
       ST_Union(ST_Buffer(a.geometry::geography, ${BUFFER_METRES})::geometry) AS geom,
@@ -17,7 +24,10 @@ const MATCH_SQL = `
     JOIN activities a
       ON  a.user_id = $1
       AND a.geometry IS NOT NULL
-      AND ST_DWithin(a.geometry::geography, t_simplified.geometry::geography, ${BUFFER_METRES})
+      -- All activity types are stored regardless of the include_cycling
+      -- preference; it's applied here, at match time, instead.
+      AND ($3::boolean OR a.activity_type <> ALL($4::text[]))
+      AND ST_DWithin(a.geometry::geography, t_simplified.geometry::geography, ${BUFFER_METRES + SIMPLIFY_MARGIN})
   ),
   -- Intersect the merged buffer with the FULL detailed trail geometry so that
   -- stored completed sections follow the exact GPX path, not a simplified approximation.
@@ -69,6 +79,13 @@ const MATCH_SQL = `
   RETURNING trail_id`;
 
 export async function computeTrailProgress(userId: string, trailIds?: string[]): Promise<number> {
+  const { rows: [userPrefs] } = await pool.query<{ include_cycling: boolean }>(
+    "SELECT include_cycling FROM users WHERE id = $1",
+    [userId]
+  );
+  const includeCycling = userPrefs?.include_cycling ?? false;
+  const cyclingTypes = Array.from(CYCLING_ACTIVITY_TYPES);
+
   const { rows: trails } = trailIds && trailIds.length > 0
     ? await pool.query<{ id: string }>(
         "SELECT id FROM trails WHERE id = ANY($1::uuid[]) ORDER BY name",
@@ -80,20 +97,29 @@ export async function computeTrailProgress(userId: string, trailIds?: string[]):
 
   for (const trail of trails) {
     const client = await pool.connect();
-    client.setMaxListeners(20);
-    // Prevent an unexpected TCP drop from crashing the process
+    // Remove any listener left over from a previous iteration (pool reuses client objects).
+    client.removeAllListeners("error");
     client.on("error", (err) => {
       console.error(`[match-trails] Client error on trail ${trail.id}:`, err.message);
     });
     try {
+      // Wrap in an explicit transaction so SET LOCAL is pinned to the same
+      // backend connection through Supabase's transaction-mode pooler.
+      // Without BEGIN, SET LOCAL fires on backend A and MATCH_SQL runs on
+      // backend B (which still has the global 2-minute cap).
+      await client.query("BEGIN");
       await client.query("SET LOCAL statement_timeout = '180000'"); // 3 min
       const result = await client.query<{ trail_id: string }>(MATCH_SQL, [
         userId,
         trail.id,
+        includeCycling,
+        cyclingTypes,
       ]);
+      await client.query("COMMIT");
       if ((result.rowCount ?? 0) > 0) matched++;
     } catch (err) {
       console.error(`[match-trails] Trail ${trail.id} failed:`, err);
+      await client.query("ROLLBACK").catch(() => {});
     } finally {
       client.release();
     }

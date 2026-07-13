@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { redirect, notFound } from "next/navigation";
 import Link from "next/link";
 import { query, pool } from "@/lib/db";
+import { CYCLING_ACTIVITY_TYPES } from "@/lib/strava";
 import TrailActions, { type ManualSegment } from "./TrailActions";
 import TrailStats from "./TrailStats";
 
@@ -46,25 +47,32 @@ export default async function TrailDetailPage({
   const userId = cookies().get("strava_user_id")?.value;
   if (!userId) redirect("/");
 
-  const trailResult = await query<TrailDetail>(
-    `SELECT
-       t.id, t.name, t.slug, t.region, t.description, t.total_distance,
-       ST_AsGeoJSON(t.geometry)::json          AS trail_geojson,
-       utp.completed_distance,
-       utp.completion_percentage,
-       utp.activity_count,
-       utp.first_activity_date,
-       utp.last_activity_date,
-       ST_AsGeoJSON(utp.completed_geometry)::json AS completed_geojson
-     FROM trails t
-     LEFT JOIN user_trail_progress utp
-       ON utp.trail_id = t.id AND utp.user_id = $1
-     WHERE t.slug = $2`,
-    [userId, params.slug]
-  );
+  const [trailResult, userPrefsResult] = await Promise.all([
+    query<TrailDetail>(
+      `SELECT
+         t.id, t.name, t.slug, t.region, t.description, t.total_distance,
+         ST_AsGeoJSON(t.geometry)::json          AS trail_geojson,
+         utp.completed_distance,
+         utp.completion_percentage,
+         utp.activity_count,
+         utp.first_activity_date,
+         utp.last_activity_date,
+         ST_AsGeoJSON(utp.completed_geometry)::json AS completed_geojson
+       FROM trails t
+       LEFT JOIN user_trail_progress utp
+         ON utp.trail_id = t.id AND utp.user_id = $1
+       WHERE t.slug = $2`,
+      [userId, params.slug]
+    ),
+    query<{ include_cycling: boolean }>(
+      "SELECT include_cycling FROM users WHERE id = $1",
+      [userId]
+    ),
+  ]);
 
   if (trailResult.rows.length === 0) notFound();
   const trail = trailResult.rows[0];
+  const includeCycling = userPrefsResult.rows[0]?.include_cycling ?? false;
 
   const [manualGeoResult, manualListResult] = await Promise.all([
     query<{ manual_geojson: object | null; manual_distance_m: number }>(
@@ -125,9 +133,10 @@ export default async function TrailDetailPage({
        CROSS JOIN (SELECT geometry FROM trails WHERE slug = $2) t
        WHERE a.user_id = $1
          AND a.geometry IS NOT NULL
+         AND ($3::boolean OR a.activity_type <> ALL($4::text[]))
          AND ST_DWithin(a.geometry::geography, t.geometry::geography, 50)
        ORDER BY a.start_date DESC`,
-      [userId, params.slug]
+      [userId, params.slug, includeCycling, Array.from(CYCLING_ACTIVITY_TYPES)]
     );
     activities = actResult.rows;
   } catch (err) {

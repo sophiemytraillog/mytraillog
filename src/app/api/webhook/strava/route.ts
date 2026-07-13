@@ -4,8 +4,7 @@ import { pool } from "@/lib/db";
 import {
   getValidAccessToken,
   decodePolylineToWKT,
-  SYNC_ACTIVITY_TYPES,
-  CYCLING_ACTIVITY_TYPES,
+  ALL_TRACKED_ACTIVITY_TYPES,
 } from "@/lib/strava";
 import { computeTrailProgress } from "@/lib/match-trails";
 import {
@@ -140,8 +139,8 @@ async function handleUpdatedActivity(activityId: number, stravaAthleteId: number
   console.log(`[webhook/strava] Update activity ${activityId} for athlete ${stravaAthleteId}`);
 
   try {
-    const { rows: [user] } = await pool.query<{ id: string; include_cycling: boolean }>(
-      "SELECT id, include_cycling FROM users WHERE strava_id = $1",
+    const { rows: [user] } = await pool.query<{ id: string }>(
+      "SELECT id FROM users WHERE strava_id = $1",
       [stravaAthleteId]
     );
     if (!user) return;
@@ -176,12 +175,9 @@ async function handleUpdatedActivity(activityId: number, stravaAthleteId: number
 
     const activity = await res.json();
     const activityType: string = activity.sport_type || activity.type;
-    const allowedTypes = user.include_cycling
-      ? new Set([...Array.from(SYNC_ACTIVITY_TYPES), ...Array.from(CYCLING_ACTIVITY_TYPES)])
-      : SYNC_ACTIVITY_TYPES;
 
     // Type changed to something we no longer track — delete it and recompute
-    if (!allowedTypes.has(activityType)) {
+    if (!ALL_TRACKED_ACTIVITY_TYPES.has(activityType)) {
       console.log(
         `[webhook/strava] Activity ${activityId} type changed to "${activityType}" (not tracked) — deleting`
       );
@@ -236,15 +232,12 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number) {
 
     const activityType: string = activity.sport_type || activity.type;
 
-    const { rows: [userPrefs] } = await pool.query<{ strava_description_updates: boolean; include_cycling: boolean }>(
-      "SELECT strava_description_updates, include_cycling FROM users WHERE id = $1",
+    const { rows: [userPrefs] } = await pool.query<{ strava_description_updates: boolean }>(
+      "SELECT strava_description_updates FROM users WHERE id = $1",
       [user.id]
     );
-    const allowedTypes = userPrefs?.include_cycling
-      ? new Set([...Array.from(SYNC_ACTIVITY_TYPES), ...Array.from(CYCLING_ACTIVITY_TYPES)])
-      : SYNC_ACTIVITY_TYPES;
 
-    if (!allowedTypes.has(activityType)) {
+    if (!ALL_TRACKED_ACTIVITY_TYPES.has(activityType)) {
       console.log(
         `[webhook/strava] Skipping — type "${activityType}" not tracked`
       );

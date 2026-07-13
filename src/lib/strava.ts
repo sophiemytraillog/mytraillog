@@ -3,6 +3,14 @@ import { query } from "./db";
 
 export const SYNC_ACTIVITY_TYPES = new Set(["Run", "TrailRun", "Walk", "Hike"]);
 export const CYCLING_ACTIVITY_TYPES = new Set(["Ride", "MountainBikeRide", "GravelRide", "EBikeRide"]);
+// Every activity type the app ever stores — independent of the include_cycling
+// preference, which only controls what counts toward trail matching, not what
+// gets saved. Keeps re-syncs from needing to hit Strava again when the
+// preference changes.
+export const ALL_TRACKED_ACTIVITY_TYPES = new Set([
+  ...Array.from(SYNC_ACTIVITY_TYPES),
+  ...Array.from(CYCLING_ACTIVITY_TYPES),
+]);
 
 // ── Token management ─────────────────────────────────────────────────────────
 

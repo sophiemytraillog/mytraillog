@@ -130,6 +130,11 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS strava_scope               TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS strava_description_updates BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS include_cycling            BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE activities ADD COLUMN IF NOT EXISTS strava_description_updated BOOLEAN NOT NULL DEFAULT FALSE;
+-- Heartbeat updated on every page fetched during a sync chunk (see
+-- src/lib/sync-engine.ts). Lets the dashboard self-heal check and the cron
+-- sweep tell "still actively syncing right now" apart from "genuinely stuck"
+-- (sync_status = 'syncing' but this timestamp has gone stale).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS sync_progress_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS trail_requests (
   id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -159,6 +164,21 @@ BEGIN
     SELECT 1 FROM pg_policies WHERE tablename = 'trails' AND policyname = 'trails_select_public'
   ) THEN
     CREATE POLICY "trails_select_public" ON trails FOR SELECT USING (true);
+  END IF;
+END
+$$;
+
+-- spatial_ref_sys is a PostGIS extension table (coordinate system definitions).
+-- Must be run as a superuser (e.g. via Supabase SQL Editor) — the app role
+-- cannot ALTER a table it does not own.
+ALTER TABLE spatial_ref_sys ENABLE ROW LEVEL SECURITY;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'spatial_ref_sys' AND policyname = 'spatial_ref_sys_select_public'
+  ) THEN
+    CREATE POLICY "spatial_ref_sys_select_public"
+      ON spatial_ref_sys FOR SELECT USING (true);
   END IF;
 END
 $$;

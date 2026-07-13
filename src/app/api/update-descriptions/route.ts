@@ -8,6 +8,12 @@ import {
 } from "@/lib/trail-descriptions";
 
 export const dynamic = "force-dynamic";
+// Vercel Hobby plan hard-caps function duration at 60s — this cannot be
+// raised without a plan upgrade, and vercel.json enforces the same value.
+// The rate limiter below already exits gracefully well before that on any
+// single run; the daily cron sweep (src/app/api/cron/sync-sweep) catches up
+// whatever a power user's account doesn't get through in one pass.
+export const maxDuration = 60;
 
 // Sliding-window rate limiter: tracks each Strava API call and blocks until
 // there is budget remaining in the current 15-minute window.
@@ -32,6 +38,14 @@ class RateLimiter {
       const waitMs = this.windowMs - (now - this.timestamps[0]) + 50;
       await new Promise<void>((r) => setTimeout(r, waitMs));
     }
+  }
+
+  // Returns ms until n slots are available (0 = capacity available now).
+  msUntilCapacity(n = 1): number {
+    const now = Date.now();
+    this.timestamps = this.timestamps.filter((t) => now - t < this.windowMs);
+    if (this.timestamps.length + n <= this.maxRequests) return 0;
+    return this.windowMs - (now - this.timestamps[0]) + 50;
   }
 }
 
@@ -66,113 +80,124 @@ export async function GET(request: NextRequest) {
       };
 
       try {
-        // Single query: join activities to trails the user has started via a
-        // spatial proximity check. Replaces the old per-trail loop which ran one
-        // ST_DWithin scan per trail (slow for users with many started trails).
-        // Step 1: trails the user has started.
-        const { rows: userTrails } = await pool.query<{ trail_id: string }>(
+        // Step 1: get the user's matched trail IDs (fast, no geometry).
+        const { rows: trailRows } = await pool.query<{ trail_id: string }>(
           `SELECT trail_id FROM user_trail_progress
            WHERE user_id = $1 AND completion_percentage > 0`,
           [userId]
         );
+        const trailIds = trailRows.map((r) => r.trail_id);
 
-        // Step 2: for each trail, find nearby unupdated activities.
-        // Queries activities with geometry-based ST_DWithin (no ::geography cast)
-        // so the GIST index on activities.geometry is used — geography casts bypass it.
-        // 0.001 degrees ≈ 90m at UK latitudes, a safe over-estimate of 50m.
-        const matchedIds = new Set<string>();
-        for (const { trail_id } of userTrails) {
-          const client = await pool.connect();
+        // Step 2: find activities near those trails in batches of 10.
+        // One big JOIN times out; small batches use the GIST index and stay fast.
+        // Per-batch try/catch means a slow batch is skipped rather than aborting.
+        const BATCH = 10;
+        const matched = new Map<string, { id: string; strava_activity_id: string; name: string }>();
+        for (let i = 0; i < trailIds.length; i += BATCH) {
+          const batch = trailIds.slice(i, i + BATCH);
           try {
-            await client.query("SET statement_timeout = '10000'");
-            const { rows } = await client.query<{ id: string }>(
-              `SELECT a.id
+            // Use geometry (not ::geography) so the GIST index on activities.geometry
+            // is used. 0.001 degrees ≈ 90 m — safe over-estimate of the 50 m buffer.
+            const { rows } = await pool.query<{ id: string; strava_activity_id: string; name: string }>(
+              `SELECT DISTINCT a.id, a.strava_activity_id::text AS strava_activity_id, a.name
                FROM activities a
+               JOIN trails t ON t.id = ANY($2::uuid[])
                WHERE a.user_id = $1
                  AND a.geometry IS NOT NULL
-                 AND (a.strava_description_updated = FALSE OR $3)
-                 AND ST_DWithin(
-                   a.geometry,
-                   (SELECT ST_SimplifyPreserveTopology(geometry, 0.001) FROM trails WHERE id = $2),
-                   0.001
-                 )`,
-              [userId, trail_id, force]
+                 AND ($3 OR a.strava_description_updated = FALSE)
+                 AND ST_DWithin(a.geometry, t.geometry, 0.001)`,
+              [userId, batch, force]
             );
-            for (const { id } of rows) matchedIds.add(id);
-          } catch (err) {
-            console.warn(`[update-descriptions] Spatial query for trail ${trail_id} failed:`, err);
-          } finally {
-            client.release();
+            for (const row of rows) matched.set(row.id, row);
+          } catch (batchErr) {
+            console.warn(`[update-descriptions] Batch ${i}–${i + BATCH} skipped:`, batchErr);
           }
         }
-
-        // Step 3: fetch details for matched activity IDs only.
-        let activities: Array<{ id: string; strava_activity_id: string; name: string }> = [];
-        if (matchedIds.size > 0) {
-          const { rows } = await pool.query<{ id: string; strava_activity_id: string; name: string }>(
-            `SELECT id, strava_activity_id::text AS strava_activity_id, name
-             FROM activities WHERE id = ANY($1::uuid[]) ORDER BY start_date DESC`,
-            [Array.from(matchedIds)]
-          );
-          activities = rows;
-        }
+        // Oldest first — so each run makes progress on historical backfill
+        // rather than re-checking recent activities that are already updated.
+        const activities = Array.from(matched.values())
+          .sort((a, b) => parseInt(a.strava_activity_id) - parseInt(b.strava_activity_id));
 
         const total = activities.length;
-        send("start", { total, message: `Checking ${total} activities near your trails…` });
+        send("start", { total, message: `Found ${total} activities near your trails…` });
 
         const limiter = new RateLimiter(100);
         let updated = 0;
         let errors = 0;
 
-        for (let i = 0; i < activities.length; i++) {
-          if (request.signal.aborted) break;
+        // Keepalive during the loop — prevents the connection going idle when
+        // processing activities that have no trail matches (no progress events sent).
+        const loopKeepalive = setInterval(() => {
+          try { controller.enqueue(encoder.encode(": keep-alive\n\n")); } catch {}
+        }, 10_000);
 
-          const act = activities[i];
+        try {
+          for (let i = 0; i < activities.length; i++) {
+            if (request.signal.aborted) break;
 
-          send("progress", {
-            current: i + 1,
-            total,
-            updated,
-            message: `Checking ${i + 1} of ${total}: ${act.name}`,
-          });
-
-          try {
-            const matches = await getActivityTrailMatches(userId, act.id);
-
-            if (matches.length === 0) {
-              console.log(`[update-descriptions] Skipping ${i + 1}/${total} — no trail match: ${act.name}`);
-              continue;
-            }
-
-            console.log(`[update-descriptions] Updating ${i + 1}/${total}: ${act.name}`);
-            const wasUpdated = await writeTrailDescription(
-              userId,
-              act.id,
-              parseInt(act.strava_activity_id),
-              matches,
-              0,
-              limiter
-            );
-
-            if (wasUpdated) {
-              updated++;
-              send("progress", {
-                current: i + 1,
+            // Stop gracefully if the Strava rate limit is exhausted — writeTrailDescription
+            // uses 2 slots per activity. Blocking here for 900 s would kill the function.
+            const waitMs = limiter.msUntilCapacity(2);
+            if (waitMs > 0) {
+              const mins = Math.ceil(waitMs / 60_000);
+              send("done", {
                 total,
                 updated,
-                message: `Updated: ${act.name} (${matches.length} trail${matches.length !== 1 ? "s" : ""})`,
+                errors,
+                message: `Rate limit reached — ${updated} updated so far. Run again in ~${mins} min to continue.`,
               });
+              return;
             }
-          } catch (err) {
-            errors++;
-            const message = err instanceof Error ? err.message : String(err);
-            console.error(`[update-descriptions] Activity ${act.id}:`, message);
 
-            if (err instanceof ScopeError) {
-              send("scope_error", { message });
-              break;
+            const act = activities[i];
+
+            send("progress", {
+              current: i + 1,
+              total,
+              updated,
+              message: `Checking ${i + 1} of ${total}: ${act.name}`,
+            });
+
+            try {
+              const matches = await getActivityTrailMatches(userId, act.id);
+
+              if (matches.length === 0) {
+                console.log(`[update-descriptions] Skipping ${i + 1}/${total} — no trail match: ${act.name}`);
+                continue;
+              }
+
+              console.log(`[update-descriptions] Updating ${i + 1}/${total}: ${act.name}`);
+              const wasUpdated = await writeTrailDescription(
+                userId,
+                act.id,
+                parseInt(act.strava_activity_id),
+                matches,
+                0,
+                limiter
+              );
+
+              if (wasUpdated) {
+                updated++;
+                send("progress", {
+                  current: i + 1,
+                  total,
+                  updated,
+                  message: `Updated: ${act.name} (${matches.length} trail${matches.length !== 1 ? "s" : ""})`,
+                });
+              }
+            } catch (err) {
+              errors++;
+              const message = err instanceof Error ? err.message : String(err);
+              console.error(`[update-descriptions] Activity ${act.id}:`, message);
+
+              if (err instanceof ScopeError) {
+                send("scope_error", { message });
+                return;
+              }
             }
           }
+        } finally {
+          clearInterval(loopKeepalive);
         }
 
         send("done", {
