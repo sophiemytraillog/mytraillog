@@ -124,11 +124,13 @@ export async function GET(request: NextRequest) {
             // that gets updated already flips strava_description_updated, so the
             // next run's discovery query naturally picks up from here.
             if (Date.now() - startedAt > TIME_BUDGET_MS) {
+              const remaining = total - i;
               send("done", {
                 total,
                 updated,
                 errors,
-                message: `Time budget reached — ${updated} updated so far (${i} of ${total} checked). Run again to continue.`,
+                remaining,
+                message: `Updated ${updated} of ${i} checked — ${remaining} remaining. Run again to continue.`,
               });
               return;
             }
@@ -138,11 +140,13 @@ export async function GET(request: NextRequest) {
             const waitMs = limiter.msUntilCapacity(2);
             if (waitMs > 0) {
               const mins = Math.ceil(waitMs / 60_000);
+              const remaining = total - i;
               send("done", {
                 total,
                 updated,
                 errors,
-                message: `Rate limit reached — ${updated} updated so far. Run again in ~${mins} min to continue.`,
+                remaining,
+                message: `Updated ${updated} of ${i} checked — ${remaining} remaining. Strava rate limit reached, run again in ~${mins} min to continue.`,
               });
               return;
             }
@@ -211,7 +215,8 @@ export async function GET(request: NextRequest) {
           total,
           updated,
           errors,
-          message: `Done — updated ${updated} activit${updated !== 1 ? "ies" : "y"}`,
+          remaining: 0,
+          message: `Done — updated ${updated} activit${updated !== 1 ? "ies" : "y"}, nothing left to check`,
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unexpected error";

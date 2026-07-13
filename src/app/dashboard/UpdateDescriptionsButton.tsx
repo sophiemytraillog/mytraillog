@@ -11,10 +11,16 @@ interface ProgressState {
   message: string;
 }
 
+interface DoneState {
+  updated: number;
+  remaining: number;
+  message: string;
+}
+
 export default function UpdateDescriptionsButton() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [progress, setProgress] = useState<ProgressState | null>(null);
-  const [finalMessage, setFinalMessage] = useState("");
+  const [done, setDone] = useState<DoneState | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
   const esRef = useRef<EventSource | null>(null);
 
@@ -23,7 +29,7 @@ export default function UpdateDescriptionsButton() {
 
     setPhase("running");
     setProgress(null);
-    setFinalMessage("");
+    setDone(null);
     setErrorMessage("");
 
     const url = force ? "/api/update-descriptions?force=true" : "/api/update-descriptions";
@@ -47,7 +53,7 @@ export default function UpdateDescriptionsButton() {
 
     es.addEventListener("done", (e) => {
       const data = JSON.parse(e.data);
-      setFinalMessage(data.message);
+      setDone({ updated: data.updated, remaining: data.remaining ?? 0, message: data.message });
       setPhase("done");
       es.close();
     });
@@ -112,8 +118,7 @@ export default function UpdateDescriptionsButton() {
           </div>
           {progress && (
             <p className="text-[#8A7F72]/70 text-[10px] mt-1.5">
-              {progress.current} of {progress.total} checked
-              {progress.updated > 0 && ` · ${progress.updated} updated`}
+              {progress.updated} updated · {Math.max(progress.total - progress.current, 0)} remaining
             </p>
           )}
           <p className="text-[#8A7F72]/50 text-[10px] mt-0.5">
@@ -129,13 +134,26 @@ export default function UpdateDescriptionsButton() {
             <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
           </svg>
           <div className="min-w-0">
-            <p className="text-xs font-medium text-[#4A7C59]">{finalMessage}</p>
-            <button
-              onClick={() => setPhase("idle")}
-              className="text-[#8A7F72] text-[10px] mt-1 hover:text-[#2C2520]"
-            >
-              Run again
-            </button>
+            <p className="text-xs font-medium text-[#4A7C59]">
+              {done && done.remaining > 0
+                ? `Updated ${done.updated} · ${done.remaining} remaining`
+                : done?.message}
+            </p>
+            {done && done.remaining > 0 ? (
+              <button
+                onClick={() => start()}
+                className="text-[#4A7C59] text-[10px] font-medium mt-1 hover:underline"
+              >
+                Continue ({done.remaining} left) →
+              </button>
+            ) : (
+              <button
+                onClick={() => setPhase("idle")}
+                className="text-[#8A7F72] text-[10px] mt-1 hover:text-[#2C2520]"
+              >
+                Run again
+              </button>
+            )}
           </div>
         </div>
       )}
