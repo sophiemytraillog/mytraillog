@@ -14,8 +14,7 @@ const DashboardMap = dynamic(() => import("./DashboardMap"), {
   ssr: false,
   loading: () => (
     <div
-      className="w-full rounded-2xl bg-[#EAE4DA] animate-pulse border border-[#E5DED4]"
-      style={{ height: "750px" }}
+      className="w-full rounded-2xl bg-[#EAE4DA] animate-pulse border border-[#E5DED4] h-[380px] lg:h-[750px]"
     />
   ),
 });
@@ -82,10 +81,10 @@ function formatLastSynced(date: Date | null): string {
 
 function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="bg-white border border-[#E5DED4] rounded-2xl px-3 py-3">
-      <p className="text-[#8A7F72] text-xs mb-1.5">{label}</p>
-      <p className="text-xl font-bold text-[#2C2520] tabular-nums leading-none">{value}</p>
-      {sub && <p className="text-[#8A7F72]/70 text-xs mt-1.5">{sub}</p>}
+    <div className="bg-white border border-[#E5DED4] rounded-2xl px-2 py-2.5 sm:px-3 sm:py-3">
+      <p className="text-[#8A7F72] text-[10px] sm:text-xs mb-1 sm:mb-1.5 leading-tight">{label}</p>
+      <p className="text-base sm:text-xl font-bold text-[#2C2520] tabular-nums leading-none">{value}</p>
+      {sub && <p className="text-[#8A7F72]/70 text-[10px] sm:text-xs mt-1 sm:mt-1.5">{sub}</p>}
     </div>
   );
 }
@@ -224,26 +223,27 @@ export default function DashboardClient({
         />
       </nav>
 
-      <div className="flex-1 px-6 py-6 max-w-7xl mx-auto w-full">
+      <div className="flex-1 px-4 py-4 sm:px-6 sm:py-6 max-w-7xl mx-auto w-full">
 
-        {/* Stat row — National Trails + Other Trails in one line */}
-        <div className="mb-5 flex gap-4">
+        {/* Stat row — National Trails + Other Trails */}
+        <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:gap-4">
           <div className="flex-1 min-w-0">
             <p className="text-[#8A7F72] text-xs font-semibold tracking-widest uppercase mb-2 px-0.5">
               National Trails
             </p>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-3 gap-2 sm:gap-3">
               <StatCard label="Trails started"   value={String(natStarted)}   sub={`of ${allNational.length} tracked`} />
               <StatCard label="Trails completed" value={String(natCompleted)} />
               <StatCard label="Distance covered" value={`${formatDist(natDistM, unit)} ${unitLabel(unit)}`} />
             </div>
           </div>
-          <div className="w-px bg-[#E5DED4] self-stretch mt-6" />
+          <div className="hidden sm:block w-px bg-[#E5DED4] self-stretch mt-6" />
+          <div className="sm:hidden h-px bg-[#E5DED4]" />
           <div className="flex-1 min-w-0">
             <p className="text-[#8A7F72] text-xs font-semibold tracking-widest uppercase mb-2 px-0.5">
               Other Trails
             </p>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-3 gap-2 sm:gap-3">
               <StatCard label="Trails started"   value={String(otherStarted)}   sub={`of ${allOther.length} tracked`} />
               <StatCard label="Trails completed" value={String(otherCompleted)} />
               <StatCard label="Distance covered" value={`${formatDist(otherDistM, unit)} ${unitLabel(unit)}`} />
@@ -251,11 +251,11 @@ export default function DashboardClient({
           </div>
         </div>
 
-        {/* Two-column layout */}
-        <div className="flex gap-5">
+        {/* Two-column layout — stacks on mobile */}
+        <div className="flex flex-col gap-4 lg:flex-row lg:gap-5">
 
           {/* LEFT column (45%): welcome box + map stacked */}
-          <div className="flex-[9] min-w-0 flex flex-col gap-4">
+          <div className="min-w-0 flex flex-col gap-4 lg:flex-[9]">
 
             {/* Welcome box */}
             <div className="bg-white border border-[#E5DED4] rounded-2xl px-5 py-4">
@@ -397,9 +397,9 @@ export default function DashboardClient({
             />
           </div>
 
-          {/* RIGHT column (55%): two sub-columns, full height */}
-          <div className="flex-[11] min-w-0 flex flex-col">
-            <div className="flex-1 bg-white border border-[#E5DED4] rounded-2xl flex flex-col overflow-hidden">
+          {/* RIGHT column (55%): trail lists */}
+          <div className="min-w-0 flex flex-col lg:flex-[11]">
+            <div className="bg-white border border-[#E5DED4] rounded-2xl flex flex-col overflow-hidden lg:flex-1">
 
               {/* Search + region filter */}
               <div className="px-4 pt-3.5 pb-3 border-b border-[#E5DED4] shrink-0 flex gap-2">
@@ -455,17 +455,17 @@ export default function DashboardClient({
                 </div>
               </div>
 
-              {/* Two sub-columns */}
-              <div className="flex flex-1 min-h-0">
+              {/* Two sub-columns — stacked on mobile, side-by-side on desktop */}
+              <div className="flex flex-col lg:flex-row lg:flex-1 lg:min-h-0">
 
                 {/* National Trails */}
-                <div className="flex-1 flex flex-col min-w-0 border-r border-[#E5DED4]">
+                <div className="flex flex-col min-w-0 border-b border-[#E5DED4] lg:border-b-0 lg:border-r lg:flex-1">
                   <div className="px-4 py-2.5 border-b border-[#E5DED4] shrink-0">
                     <p className="text-[#8A7F72] text-xs font-semibold tracking-widest uppercase">
                       National Trails
                     </p>
                   </div>
-                  <div className="flex-1 overflow-y-auto px-3 py-3">
+                  <div className="overflow-y-auto px-3 py-3 max-h-[320px] lg:max-h-none lg:flex-1">
                     {nationalTrails.length > 0 ? (
                       <NationalTrailsList
                         trails={nationalTrails}
@@ -482,7 +482,7 @@ export default function DashboardClient({
                 </div>
 
                 {/* Other trails */}
-                <div className="flex-1 flex flex-col min-w-0">
+                <div className="flex flex-col min-w-0 lg:flex-1">
                   <div className="px-4 py-2.5 border-b border-[#E5DED4] shrink-0 flex items-center justify-between">
                     <p className="text-[#8A7F72] text-xs font-semibold tracking-widest uppercase">
                       Other trails
@@ -497,7 +497,7 @@ export default function DashboardClient({
                       Request
                     </button>
                   </div>
-                  <div className="flex-1 overflow-y-auto px-3 py-3">
+                  <div className="overflow-y-auto px-3 py-3 max-h-[320px] lg:max-h-none lg:flex-1">
                     {otherTrails.length > 0 ? (
                       <TrailProgressList
                         trails={otherTrails}
@@ -505,7 +505,7 @@ export default function DashboardClient({
                         onTrailSelect={setSelectedSlug}
                       />
                     ) : (
-                      <div className="flex flex-col items-center justify-center h-full text-center px-4">
+                      <div className="flex flex-col items-center justify-center py-10 text-center px-4">
                         {searchActive ? (
                           <>
                             <p className="text-[#8A7F72] text-xs">No trails match your search.</p>
@@ -545,7 +545,7 @@ export default function DashboardClient({
 
       {/* Footer */}
       <footer className="border-t border-[#E5DED4] py-4 px-6 mt-2">
-        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="flex items-center gap-2 text-[#8A7F72]">
             <LogoIcon className="w-4 h-4 text-[#C4652A]" />
             <span className="text-sm font-medium">My Trail Log</span>

@@ -257,8 +257,8 @@ export default function TrailMap({
   }, [markingPoints]);
 
   return (
-    <div className="w-full rounded-2xl overflow-hidden" style={{ height: "500px" }}>
-      <div ref={containerRef} style={{ width: "100%", height: "500px" }} />
+    <div className="w-full rounded-2xl overflow-hidden h-[320px] sm:h-[500px]">
+      <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
     </div>
   );
 }

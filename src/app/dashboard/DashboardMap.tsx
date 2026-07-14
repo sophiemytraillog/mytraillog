@@ -57,7 +57,7 @@ export default function DashboardMap({ trails, selectedSlug, onTrailClick }: Pro
     import("leaflet").then((L) => {
       if (!containerRef.current || mapRef.current) return;
 
-      const map = L.map(containerRef.current, { zoomControl: true, zoomAnimation: false });
+      const map = L.map(containerRef.current, { zoomControl: true, zoomAnimation: false, minZoom: 5 });
       mapRef.current = map;
 
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -65,8 +65,9 @@ export default function DashboardMap({ trails, selectedSlug, onTrailClick }: Pro
         maxZoom: 18,
       }).addTo(map);
 
-      // Fit to Great Britain
-      map.fitBounds([[49.5, -8.5], [61.0, 2.0]]);
+      // Fit to Great Britain — invalidateSize first so Leaflet knows the container dimensions
+      map.invalidateSize();
+      map.fitBounds([[49.5, -8.0], [61.0, 2.0]]);
 
       for (const trail of trails) {
         if (!trail.trail_geojson) continue;
@@ -140,7 +141,7 @@ export default function DashboardMap({ trails, selectedSlug, onTrailClick }: Pro
   }, [selectedSlug]);
 
   return (
-    <div className="w-full rounded-2xl overflow-hidden border border-[#E5DED4]" style={{ height: "750px" }}>
+    <div className="w-full rounded-2xl overflow-hidden border border-[#E5DED4] h-[380px] lg:h-[750px]">
       <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
     </div>
   );

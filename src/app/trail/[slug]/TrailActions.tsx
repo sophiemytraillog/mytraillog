@@ -7,10 +7,7 @@ import { TrailSelectionContext } from "./TrailSelectionContext";
 const TrailMap = dynamic(() => import("./TrailMap"), {
   ssr: false,
   loading: () => (
-    <div
-      className="w-full rounded-2xl bg-[#EAE4DA] animate-pulse"
-      style={{ height: "500px" }}
-    />
+    <div className="w-full rounded-2xl bg-[#EAE4DA] animate-pulse h-[320px] sm:h-[500px]" />
   ),
 });
 
@@ -234,7 +231,7 @@ export default function TrailActions({
         {/* Show/hide remaining toggle */}
         <button
           onClick={() => setShowRemaining((v) => !v)}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border ${
+          className={`flex items-center gap-1.5 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors border ${
             showRemaining
               ? "bg-[#C4652A] border-[#C4652A] text-white"
               : "bg-white border-[#E5DED4] text-[#8A7F72] hover:text-[#2C2520] hover:border-[#C4652A]/40"
@@ -261,7 +258,7 @@ export default function TrailActions({
           <button
             onClick={handleFillGaps}
             disabled={isFilling || !!pendingAction}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-white border border-[#E5DED4] text-[#8A7F72] hover:text-[#2C2520] hover:border-[#C4652A]/40 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            className="flex items-center gap-1.5 px-3 py-2.5 rounded-lg text-sm font-medium bg-white border border-[#E5DED4] text-[#8A7F72] hover:text-[#2C2520] hover:border-[#C4652A]/40 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -284,7 +281,7 @@ export default function TrailActions({
           <button
             onClick={() => { setPendingAction("fill-all"); setMessage(null); }}
             disabled={isFilling || !!pendingAction}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-white border border-[#E5DED4] text-[#8A7F72] hover:text-[#2C2520] hover:border-[#C4652A]/40 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            className="flex items-center gap-1.5 px-3 py-2.5 rounded-lg text-sm font-medium bg-white border border-[#E5DED4] text-[#8A7F72] hover:text-[#2C2520] hover:border-[#C4652A]/40 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5">
               <path fillRule="evenodd" d="M8 1a.75.75 0 0 1 .75.75V6h4.25a.75.75 0 0 1 0 1.5H8.75v4.25a.75.75 0 0 1-1.5 0V7.5H3a.75.75 0 0 1 0-1.5h4.25V1.75A.75.75 0 0 1 8 1Z" clipRule="evenodd" />
@@ -297,7 +294,7 @@ export default function TrailActions({
         <button
           onClick={() => { setPendingAction("mark-complete"); setMessage(null); }}
           disabled={isFilling || !!pendingAction}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-white border border-[#E5DED4] text-[#8A7F72] hover:text-[#2C2520] hover:border-[#C4652A]/40 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          className="flex items-center gap-1.5 px-3 py-2.5 rounded-lg text-sm font-medium bg-white border border-[#E5DED4] text-[#8A7F72] hover:text-[#2C2520] hover:border-[#C4652A]/40 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5">
             <path fillRule="evenodd" d="M12.416 3.376a.75.75 0 0 1 .208 1.04l-5 7.5a.75.75 0 0 1-1.154.114l-3-3a.75.75 0 0 1 1.06-1.06l2.353 2.353 4.493-6.74a.75.75 0 0 1 1.04-.207Z" clipRule="evenodd" />
@@ -312,7 +309,7 @@ export default function TrailActions({
               setIsMarkingMode(true);
               setMessage(null);
             }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-white border border-[#E5DED4] text-[#8A7F72] hover:text-[#2C2520] hover:border-[#C4652A]/40 transition-colors"
+            className="flex items-center gap-1.5 px-3 py-2.5 rounded-lg text-sm font-medium bg-white border border-[#E5DED4] text-[#8A7F72] hover:text-[#2C2520] hover:border-[#C4652A]/40 transition-colors"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -331,7 +328,7 @@ export default function TrailActions({
         ) : (
           <button
             onClick={cancelMarking}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-white border border-[#E5DED4] text-[#8A7F72] hover:text-[#2C2520] transition-colors"
+            className="flex items-center gap-1.5 px-3 py-2.5 rounded-lg text-sm font-medium bg-white border border-[#E5DED4] text-[#8A7F72] hover:text-[#2C2520] transition-colors"
           >
             Cancel
           </button>
@@ -350,7 +347,7 @@ export default function TrailActions({
             <button
               onClick={handleConfirmAction}
               disabled={isActioning}
-              className="px-4 py-1.5 bg-[#C4652A] hover:bg-[#b35a25] border border-[#C4652A] rounded-lg text-white text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="px-4 py-2.5 bg-[#C4652A] hover:bg-[#b35a25] border border-[#C4652A] rounded-lg text-white text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {isActioning ? "Applying…" : "Confirm"}
             </button>
@@ -377,7 +374,7 @@ export default function TrailActions({
             <button
               onClick={handleConfirmManual}
               disabled={isConfirming}
-              className="mt-2.5 px-4 py-1.5 bg-[#C4652A] hover:bg-[#b35a25] border border-[#C4652A] rounded-lg text-white text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="mt-2.5 px-4 py-2.5 bg-[#C4652A] hover:bg-[#b35a25] border border-[#C4652A] rounded-lg text-white text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {isConfirming ? "Saving…" : "Confirm section"}
             </button>
