@@ -9,6 +9,7 @@ import {
   getActivityTrailMatches,
   writeTrailDescription,
   ScopeError,
+  StravaRateLimitError,
 } from "@/lib/trail-descriptions";
 
 const PER_PAGE = 30;
@@ -251,6 +252,10 @@ export async function finishSync(
       } catch (err) {
         if (err instanceof ScopeError) {
           console.warn("[sync-engine] Scope error updating description — skipping:", err.message);
+          break;
+        }
+        if (err instanceof StravaRateLimitError) {
+          console.warn("[sync-engine] Strava rate limit hit — stopping description updates for this sync:", err.message);
           break;
         }
         console.error("[sync-engine] Description update error:", err);

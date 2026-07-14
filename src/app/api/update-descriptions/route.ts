@@ -5,6 +5,7 @@ import {
   getActivityTrailMatches,
   writeTrailDescription,
   ScopeError,
+  StravaRateLimitError,
 } from "@/lib/trail-descriptions";
 
 export const dynamic = "force-dynamic";
@@ -197,6 +198,23 @@ export async function GET(request: NextRequest) {
                 });
               }
             } catch (err) {
+              if (err instanceof StravaRateLimitError) {
+                // Our own limiter thought there was capacity, but Strava disagreed
+                // (it resets every invocation and can't see other recent runs).
+                // Stop cleanly instead of retrying — this activity's checkpoint
+                // wasn't written, so the next run picks it back up.
+                const mins = Math.ceil(err.retryAfterSeconds / 60);
+                const remaining = total - i;
+                send("done", {
+                  total,
+                  updated,
+                  errors,
+                  remaining,
+                  message: `Updated ${updated} of ${i} checked — ${remaining} remaining. Strava rate limit reached, run again in ~${mins} min to continue.`,
+                });
+                return;
+              }
+
               errors++;
               const message = err instanceof Error ? err.message : String(err);
               console.error(`[update-descriptions] Activity ${act.id}:`, message);

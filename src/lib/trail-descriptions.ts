@@ -11,13 +11,28 @@ async function fetchWithTimeout(url: string, options: RequestInit, ms = 30_000):
   }
 }
 
-// Fetch with automatic retry on 429 — waits Retry-After (default 15 min) then retries once.
+export class StravaRateLimitError extends Error {
+  readonly retryAfterSeconds: number;
+  constructor(retryAfterSeconds: number) {
+    super(`Strava rate limit hit — retry after ${retryAfterSeconds}s`);
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
+// Our own in-process RateLimiter is meant to stay under Strava's real limit,
+// but it resets every function invocation and can't see requests from other
+// recent invocations — so it can still under-count and let a real 429 through.
+// Retry-After can be up to 15 minutes, which always exceeds Vercel's 60s
+// function budget, so retrying in-process would just get the function killed
+// mid-sleep with zero progress and no feedback. Fail fast instead and let the
+// caller report a clean "rate limited, try again in N min" message.
 async function fetchStrava(url: string, options: RequestInit): Promise<Response> {
   const res = await fetchWithTimeout(url, options);
-  if (res.status !== 429) return res;
-  const retryAfter = parseInt(res.headers.get("Retry-After") ?? "900");
-  await new Promise<void>((r) => setTimeout(r, retryAfter * 1000));
-  return fetchWithTimeout(url, options);
+  if (res.status === 429) {
+    const retryAfter = parseInt(res.headers.get("Retry-After") ?? "900");
+    throw new StravaRateLimitError(retryAfter);
+  }
+  return res;
 }
 
 const BUFFER_METRES = 50;
