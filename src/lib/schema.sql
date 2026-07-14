@@ -141,6 +141,17 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS sync_progress_at TIMESTAMPTZ;
 -- skip pairs that are already done instead of recomputing them.
 ALTER TABLE user_trail_progress ADD COLUMN IF NOT EXISTS activity_matches_computed_at TIMESTAMPTZ;
 
+-- Global (app-wide, not per-user) daily counter for the historical
+-- description-update backlog scan in update-descriptions/route.ts. Strava's
+-- rate limit is enforced per-application across all users combined, so this
+-- caps that one feature's share of it, leaving the rest of the daily quota
+-- free for normal syncs/webhooks/new-activity processing. One row per UTC
+-- day; a new day just gets a fresh row (see reserveBackfillSlot).
+CREATE TABLE IF NOT EXISTS backfill_api_usage (
+  usage_date  DATE PRIMARY KEY,
+  calls_used  INTEGER NOT NULL DEFAULT 0
+);
+
 -- Cached candidate list for description updates: which activities sit near
 -- which matched trails. Populated incrementally by computeTrailProgress
 -- (see src/lib/match-trails.ts) so update-descriptions/route.ts can look
@@ -182,6 +193,7 @@ ALTER TABLE user_trail_progress        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_trail_manual_segments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trail_requests             ENABLE ROW LEVEL SECURITY;
 ALTER TABLE activity_trail_matches     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE backfill_api_usage         ENABLE ROW LEVEL SECURITY;
 
 -- Trails are public reference data — allow anyone to read them
 DO $$

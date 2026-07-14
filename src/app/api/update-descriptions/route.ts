@@ -20,6 +20,37 @@ export const maxDuration = 60;
 // stream close within the 60s ceiling.
 const TIME_BUDGET_MS = 45_000;
 
+// Strava's rate limit is enforced per-application across every user combined
+// (see StravaRateLimitError) — this backlog scan is the one feature that can
+// burn through it fastest, so it gets its own fixed daily share rather than
+// competing with normal syncs/webhooks/new-activity processing for whatever's
+// left. 250 updates/day ≈ 500 calls/day (GET+PUT per update), leaving the
+// remaining ~1,500 of the app's ~2,000/day quota free for everything else.
+const DAILY_UPDATE_BUDGET = 250;
+
+// Reserves one attempt against the app-wide daily backfill budget, paced
+// evenly across the day (via an elapsed-fraction ceiling) rather than
+// spendable in one burst — otherwise the first user to click "Update
+// historical descriptions" each day could burn the whole thing in minutes.
+// Atomic: the conditional UPDATE means concurrent requests can't both
+// reserve past the ceiling.
+async function reserveBackfillSlot(): Promise<boolean> {
+  const now = new Date();
+  const startOfDayUTC = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const fractionOfDayElapsed = (now.getTime() - startOfDayUTC) / (24 * 60 * 60 * 1000);
+  const allowedSoFar = Math.max(1, Math.floor(DAILY_UPDATE_BUDGET * fractionOfDayElapsed));
+
+  const { rows } = await pool.query<{ calls_used: number }>(
+    `INSERT INTO backfill_api_usage (usage_date, calls_used) VALUES (CURRENT_DATE, 1)
+     ON CONFLICT (usage_date) DO UPDATE
+       SET calls_used = backfill_api_usage.calls_used + 1
+       WHERE backfill_api_usage.calls_used < $1
+     RETURNING calls_used`,
+    [allowedSoFar]
+  );
+  return rows.length > 0;
+}
+
 // Sliding-window rate limiter: tracks each Strava API call and blocks until
 // there is budget remaining in the current 15-minute window.
 class RateLimiter {
@@ -176,6 +207,20 @@ export async function GET(request: NextRequest) {
                   [act.id]
                 ).catch(() => {});
                 continue;
+              }
+
+              // Only real Strava-calling attempts count against the daily
+              // backfill budget — checking for a match above is DB-only.
+              if (!(await reserveBackfillSlot())) {
+                const remaining = total - i;
+                send("done", {
+                  total,
+                  updated,
+                  errors,
+                  remaining,
+                  message: `Updated ${updated} of ${i} checked — ${remaining} remaining. Daily backfill pacing limit reached — more opens up gradually through the day. Run again later.`,
+                });
+                return;
               }
 
               console.log(`[update-descriptions] Updating ${i + 1}/${total}: ${act.name}`);
