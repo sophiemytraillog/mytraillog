@@ -79,8 +79,9 @@ export default function RequestTrailModal({ initialName = "", onClose }: Props) 
                 <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
               </svg>
             </div>
-            <p className="text-sm font-medium text-[#2C2520] mb-1">Request submitted!</p>
-            <p className="text-xs text-[#8A7F72]">Thanks — we&apos;ll review it and add it to the database.</p>
+            <p className="text-sm font-medium text-[#2C2520] mb-1">
+              Thanks! We&apos;ll review your request and try to add it soon.
+            </p>
             <button
               onClick={onClose}
               className="mt-4 px-4 py-2 bg-[#C4652A] text-white text-xs font-medium rounded-lg hover:bg-[#B05A25] transition-colors"
