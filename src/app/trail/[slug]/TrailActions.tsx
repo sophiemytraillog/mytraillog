@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useMemo } from "react";
 import dynamic from "next/dynamic";
+import { useRouter } from "next/navigation";
 import { TrailSelectionContext } from "./TrailSelectionContext";
 
 const TrailMap = dynamic(() => import("./TrailMap"), {
@@ -74,6 +75,7 @@ export default function TrailActions({
   const [pendingAction, setPendingAction] = useState<"fill-all" | "mark-complete" | null>(null);
   const [isActioning, setIsActioning] = useState(false);
   const [message, setMessage] = useState<{ text: string; kind: "info" | "error" } | null>(null);
+  const router = useRouter();
 
   const handleMapClick = useCallback((latlng: [number, number]) => {
     setMarkingPoints((prev) => (prev.length < 2 ? [...prev, latlng] : prev));
@@ -82,6 +84,10 @@ export default function TrailActions({
   const applyResponse = (data: ApiResponse) => {
     setManualGeoJson(data.manualSegmentsGeoJson);
     setManualSegments(data.manualSegments);
+    // pct/completedM (TrailStats) come from page.tsx's server-side query and
+    // aren't part of this response — refresh so the stats reflect the fill
+    // instead of staying stuck at whatever they were on the initial page load.
+    router.refresh();
   };
 
   const handleFillGaps = async () => {
