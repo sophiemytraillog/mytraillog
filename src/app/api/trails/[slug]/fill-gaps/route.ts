@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { type PoolClient } from "pg";
 import { pool } from "@/lib/db";
 
+export const maxDuration = 60;
+
 export async function POST(
   req: Request,
   { params }: { params: { slug: string } }
@@ -13,7 +15,7 @@ export async function POST(
 
   const client = await pool.connect();
   try {
-    await client.query("SET statement_timeout = '30000'");
+    await client.query("SET statement_timeout = '55000'");
 
     const { rows: [trail] } = await client.query<{ id: string }>(
       "SELECT id FROM trails WHERE slug = $1",
@@ -27,27 +29,68 @@ export async function POST(
       [userId, trail.id]
     );
 
-    // Find gaps < 500 m between completed sections
+    // Find gaps < 500 m between completed sections.
+    //
+    // Each piece of completed_geometry is projected onto the trail line by
+    // locating its own start/end points (ST_LineLocatePoint) — no upfront
+    // ST_Union/ST_LineMerge. Merging first is what broke closed-loop trails
+    // (e.g. Yew Tree Way): if two completed pieces are joined end-to-end at
+    // the loop's closure point, ST_LineMerge welds them into one LineString
+    // that quietly bridges any real gap elsewhere on the loop, so the "gaps"
+    // step below never even sees two separate pieces to compare.
+    //
+    // Two loop-specific issues get handled explicitly:
+    //  - `could_wrap`/`direct_len` check: on a closed loop, fraction 0 and 1
+    //    are the same physical point, so ST_LineLocatePoint can't tell them
+    //    apart — a piece approaching the closure point from the "1.0" side
+    //    locates as 0. Detected by comparing each piece's real length against
+    //    what its naive [lo,hi] reading implies; a mismatch means it actually
+    //    runs from `hi` up to 1.0, not from `lo` to `hi`.
+    //  - edge_start_gap/edge_end_gap: gaps at the very start or end of a
+    //    (non-loop) trail were never checked at all — the original query only
+    //    ever compared completed pieces to each other, never to the trail's
+    //    own fraction-0/fraction-1 endpoints.
     const { rows: gaps } = await client.query<{ gap_from: number; gap_to: number; gap_m: number }>(
       `WITH trail_geom AS (
-         SELECT geometry FROM trails WHERE id = $2
+         SELECT geometry, ST_Equals(ST_StartPoint(geometry), ST_EndPoint(geometry)) AS is_loop
+         FROM trails WHERE id = $2
        ),
-       merged_segs AS (
-         SELECT (ST_Dump(ST_LineMerge(ST_Union(completed_geometry::geometry)))).geom AS seg
+       pieces AS (
+         SELECT (ST_Dump(completed_geometry)).geom AS seg
          FROM user_trail_progress
          WHERE user_id = $1 AND trail_id = $2 AND completed_geometry IS NOT NULL
        ),
+       candidates AS (
+         SELECT
+           seg,
+           ST_Length(seg::geography) AS seg_len,
+           LEAST(
+             ST_LineLocatePoint(tg.geometry, ST_StartPoint(seg)),
+             ST_LineLocatePoint(tg.geometry, ST_EndPoint(seg))
+           ) AS lo,
+           GREATEST(
+             ST_LineLocatePoint(tg.geometry, ST_StartPoint(seg)),
+             ST_LineLocatePoint(tg.geometry, ST_EndPoint(seg))
+           ) AS hi,
+           tg.geometry AS tgeom,
+           tg.is_loop AS is_loop
+         FROM pieces CROSS JOIN trail_geom tg
+         WHERE ST_Length(seg::geography) > 0
+       ),
+       resolved AS (
+         SELECT
+           seg_len, lo, hi, tgeom,
+           ST_Length(ST_LineSubstring(tgeom, lo, hi)::geography) AS direct_len,
+           (is_loop AND lo < 0.0005) AS could_wrap
+         FROM candidates
+       ),
        located AS (
          SELECT
-           LEAST(
-             ST_LineLocatePoint(tg.geometry, ST_StartPoint(ms.seg)),
-             ST_LineLocatePoint(tg.geometry, ST_EndPoint(ms.seg))
-           ) AS frac_start,
-           GREATEST(
-             ST_LineLocatePoint(tg.geometry, ST_StartPoint(ms.seg)),
-             ST_LineLocatePoint(tg.geometry, ST_EndPoint(ms.seg))
-           ) AS frac_end
-         FROM merged_segs ms CROSS JOIN trail_geom tg
+           CASE WHEN could_wrap AND ABS(direct_len - seg_len) > GREATEST(seg_len * 0.1, 25)
+                THEN hi ELSE lo END AS frac_start,
+           CASE WHEN could_wrap AND ABS(direct_len - seg_len) > GREATEST(seg_len * 0.1, 25)
+                THEN 1.0 ELSE hi END AS frac_end
+         FROM resolved
        ),
        ordered AS (
          SELECT frac_start, frac_end,
@@ -55,11 +98,29 @@ export async function POST(
          FROM located
          WHERE frac_end > frac_start + 0.000001
        ),
-       gaps AS (
+       bounds AS (
+         SELECT MIN(rn) AS min_rn, MAX(rn) AS max_rn FROM ordered
+       ),
+       internal_gaps AS (
          SELECT a.frac_end AS gap_from, b.frac_start AS gap_to
          FROM ordered a
          JOIN ordered b ON b.rn = a.rn + 1
          WHERE b.frac_start > a.frac_end + 0.00001
+       ),
+       edge_start_gap AS (
+         SELECT 0::double precision AS gap_from, o.frac_start AS gap_to
+         FROM ordered o, bounds b, trail_geom tg
+         WHERE o.rn = b.min_rn AND NOT tg.is_loop AND o.frac_start > 0.00001
+       ),
+       edge_end_gap AS (
+         SELECT o.frac_end AS gap_from, 1::double precision AS gap_to
+         FROM ordered o, bounds b, trail_geom tg
+         WHERE o.rn = b.max_rn AND NOT tg.is_loop AND o.frac_end < 0.99999
+       ),
+       gaps AS (
+         SELECT gap_from, gap_to FROM internal_gaps
+         UNION ALL SELECT gap_from, gap_to FROM edge_start_gap
+         UNION ALL SELECT gap_from, gap_to FROM edge_end_gap
        )
        SELECT
          g.gap_from,
@@ -85,6 +146,10 @@ export async function POST(
 
     const manualData = await getManualSegmentsData(client, userId, trail.id);
     return NextResponse.json({ filledCount: gaps.length, ...manualData });
+  } catch (err) {
+    console.error("[fill-gaps]", err);
+    const message = err instanceof Error ? err.message : "Unexpected error";
+    return NextResponse.json({ error: message }, { status: 500 });
   } finally {
     client.release();
   }
