@@ -63,7 +63,16 @@ export async function GET(request: NextRequest) {
           message: `Sync complete — ${result.saved} activit${result.saved === 1 ? "y" : "ies"} saved`,
         });
 
-        await finishSync(userId, result.newDbIds);
+        const { matchedTrails } = await finishSync(userId, result.newDbIds);
+
+        // Sent once trail matching (and description writes) have actually
+        // landed in the DB — the client waits for this before refreshing the
+        // dashboard, otherwise it re-reads stats mid-match and shows stale
+        // stat cards right after a sync that visibly said "done".
+        send("matched", {
+          matchedTrails,
+          message: "Trail progress updated",
+        });
       } catch (err) {
         const message = err instanceof Error ? err.message : "An unexpected error occurred";
         console.error("[sync/activities] Fatal error:", err);

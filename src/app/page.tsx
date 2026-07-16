@@ -104,7 +104,28 @@ function StravaButton() {
   );
 }
 
-export default function Home() {
+const OAUTH_ERROR_MESSAGES: Record<string, string> = {
+  access_denied: "Strava connection cancelled — no changes were made.",
+  invalid_state: "Your session expired before Strava could connect — please try again.",
+  no_code: "Strava didn't send back the expected authorisation — please try again.",
+  token_exchange_failed: "We couldn't complete the connection with Strava — please try again.",
+};
+
+function ConnectErrorBanner({ error }: { error?: string }) {
+  if (!error) return null;
+  const message = OAUTH_ERROR_MESSAGES[error] ?? "Something went wrong connecting to Strava — please try again.";
+  return (
+    <div className="max-w-lg mx-auto mb-8 px-4 py-3 rounded-xl bg-[#C4652A]/10 border border-[#C4652A]/20 text-[#C4652A] text-sm text-center">
+      {message}
+    </div>
+  );
+}
+
+export default function Home({
+  searchParams,
+}: {
+  searchParams?: { error?: string };
+}) {
   return (
     <div className="min-h-screen">
       {/* ── Navigation ─────────────────────────────────────────── */}
@@ -137,6 +158,8 @@ export default function Home() {
 
         {/* Hero content */}
         <div className="relative z-10 text-center px-6 max-w-4xl mx-auto">
+          <ConnectErrorBanner error={searchParams?.error} />
+
           <div className="inline-flex items-center gap-2 bg-[#C4652A]/10 border border-[#C4652A]/20 text-[#C4652A] text-xs font-semibold tracking-[0.12em] uppercase px-4 py-2 rounded-full mb-8">
             <span className="w-1.5 h-1.5 bg-[#C4652A] rounded-full inline-block" />
             Britain&apos;s long-distance trail tracker

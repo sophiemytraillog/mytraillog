@@ -26,29 +26,64 @@ export default function SyncButton({
   const [activityCount, setActivityCount] = useState(initialActivityCount);
   const esRef = useRef<EventSource | null>(null);
   const autoFired = useRef(false);
+  // Totals from chunks already finished this sync — each SSE connection's
+  // fetched/saved counters start back at 0 (see runSyncChunk), so the UI
+  // has to add them to what earlier chunks already reported.
+  const baseRef = useRef({ fetched: 0, saved: 0 });
+  // The "done" event's message (e.g. "Sync complete — 3 activities saved") —
+  // held here so it can be restored once "matched" arrives, replacing the
+  // interim "Updating trail progress…" text.
+  const doneMessageRef = useRef("");
+  // Large histories take many 45s chunks to sync. Cap the auto-continue loop
+  // so a pathological case (e.g. every chunk instantly reporting "partial")
+  // can't spin forever — a real sync needs nowhere near this many chunks.
+  const chunkCountRef = useRef(0);
+  const MAX_CHUNKS = 200;
 
-  const startSync = () => {
-    if (syncState === "syncing") return;
-    esRef.current?.close();
-
-    setSyncState("syncing");
-    setData({ fetched: 0, saved: 0, message: "Connecting…" });
-
-    router.replace("/dashboard", { scroll: false });
-
+  const runChunk = () => {
     const es = new EventSource("/api/sync/activities");
     esRef.current = es;
 
+    const combined = (d: SyncData): SyncData => ({
+      fetched: baseRef.current.fetched + d.fetched,
+      saved: baseRef.current.saved + d.saved,
+      message: d.message,
+    });
+
     es.addEventListener("progress", (e: MessageEvent) => {
+      setData(combined(JSON.parse(e.data)));
+    });
+
+    es.addEventListener("partial", (e: MessageEvent) => {
       const d: SyncData = JSON.parse(e.data);
-      setData(d);
+      baseRef.current = { fetched: baseRef.current.fetched + d.fetched, saved: baseRef.current.saved + d.saved };
+      setData({ ...baseRef.current, message: d.message });
+      es.close();
+
+      chunkCountRef.current += 1;
+      if (chunkCountRef.current >= MAX_CHUNKS) {
+        setSyncState("error");
+        setData((prev) => ({ ...prev, message: "Sync is taking longer than expected — please retry." }));
+        return;
+      }
+      runChunk();
     });
 
     es.addEventListener("done", (e: MessageEvent) => {
       const d: SyncData = JSON.parse(e.data);
-      setData(d);
-      setActivityCount((prev) => prev + d.saved);
+      const final = combined(d);
+      baseRef.current = { fetched: final.fetched, saved: final.saved };
+      doneMessageRef.current = d.message;
+      setData({ ...final, message: `${d.message} — updating trail progress…` });
+      es.close();
+      // Wait for "matched" before refreshing — matching runs server-side
+      // after "done" is sent, so refreshing now would read stale stats.
+    });
+
+    es.addEventListener("matched", () => {
+      setData((prev) => ({ ...prev, message: doneMessageRef.current }));
       setSyncState("done");
+      setActivityCount(initialActivityCount + baseRef.current.saved);
       es.close();
       onSyncComplete?.();
       router.refresh();
@@ -66,6 +101,20 @@ export default function SyncButton({
       setData((prev) => ({ ...prev, message: "Connection lost — please retry" }));
       es.close();
     };
+  };
+
+  const startSync = () => {
+    if (syncState === "syncing") return;
+    esRef.current?.close();
+
+    baseRef.current = { fetched: 0, saved: 0 };
+    chunkCountRef.current = 0;
+    setSyncState("syncing");
+    setData({ fetched: 0, saved: 0, message: "Connecting…" });
+
+    router.replace("/dashboard", { scroll: false });
+
+    runChunk();
   };
 
   useEffect(() => {
