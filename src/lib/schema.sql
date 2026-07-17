@@ -136,6 +136,14 @@ ALTER TABLE activities ADD COLUMN IF NOT EXISTS strava_description_updated BOOLE
 -- (sync_status = 'syncing' but this timestamp has gone stale).
 ALTER TABLE users ADD COLUMN IF NOT EXISTS sync_progress_at TIMESTAMPTZ;
 
+-- Strava's athlete.measurement_preference ("feet" or "meters") — only
+-- available via the detailed athlete endpoint, captured at OAuth connect
+-- time. distance_unit is the dashboard's own km/mi toggle, persisted here
+-- so server-side code (Strava description writes) has something to fall
+-- back to when measurement_preference is unknown (NULL).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS measurement_preference TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS distance_unit          TEXT NOT NULL DEFAULT 'km';
+
 -- Marks when computeTrailProgress last populated activity_trail_matches for
 -- this (user, trail) pair — lets the backfill script (and future reruns)
 -- skip pairs that are already done instead of recomputing them.

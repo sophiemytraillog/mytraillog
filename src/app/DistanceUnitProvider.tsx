@@ -21,6 +21,13 @@ export function DistanceUnitProvider({ children }: { children: React.ReactNode }
   function setUnit(u: DistanceUnit) {
     setUnitState(u);
     localStorage.setItem(STORAGE_KEY, u);
+    // Persisted server-side so Strava description writes have a fallback
+    // when the athlete's Strava measurement_preference is unavailable.
+    fetch("/api/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ distance_unit: u }),
+    }).catch(() => {});
   }
 
   return (

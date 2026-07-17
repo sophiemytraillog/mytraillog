@@ -1,5 +1,6 @@
 import { pool } from "@/lib/db";
 import { getValidAccessToken } from "@/lib/strava";
+import { formatDist, unitLabel, type DistanceUnit } from "@/lib/distance";
 
 async function fetchWithTimeout(url: string, options: RequestInit, ms = 30_000): Promise<Response> {
   const ac = new AbortController();
@@ -47,7 +48,15 @@ export interface TrailMatch {
 
 /**
  * Find which trails an activity overlaps (within 50 m) where the user has
- * recorded progress.  Returns an empty array if the activity has no geometry.
+ * recorded progress. Returns an empty array if the activity has no geometry.
+ *
+ * completed_distance/completion_percentage fold in manually-filled segments
+ * (user_trail_manual_segments) on top of user_trail_progress's GPS-derived
+ * figures — mirroring the same combination dashboard/page.tsx and
+ * trail/[slug]/page.tsx already do at query time. user_trail_progress itself
+ * intentionally stores GPS-only progress (computeTrailProgress never touches
+ * manual segments), so any consumer that skips this combination under-reports
+ * completion for trails with a manual fill.
  */
 export async function getActivityTrailMatches(
   userId: string,
@@ -55,8 +64,16 @@ export async function getActivityTrailMatches(
 ): Promise<TrailMatch[]> {
   const { rows } = await pool.query<TrailMatch>(
     `SELECT t.name,
-            utp.completed_distance,
-            utp.completion_percentage,
+            LEAST(
+              utp.completed_distance + COALESCE(ms.manual_m, 0),
+              t.total_distance
+            ) AS completed_distance,
+            LEAST(
+              CASE WHEN t.total_distance > 0
+                   THEN (utp.completed_distance + COALESCE(ms.manual_m, 0)) / t.total_distance * 100
+                   ELSE 0 END,
+              100
+            ) AS completion_percentage,
             t.total_distance,
             COALESCE(
               ST_Length(
@@ -72,11 +89,16 @@ export async function getActivityTrailMatches(
        ON ST_DWithin(a.geometry::geography, t.geometry::geography, $3)
      JOIN user_trail_progress utp
        ON utp.trail_id = t.id AND utp.user_id = a.user_id
+     LEFT JOIN (
+       SELECT trail_id, user_id, SUM(ST_Length(geometry::geography)) AS manual_m
+       FROM user_trail_manual_segments
+       GROUP BY trail_id, user_id
+     ) ms ON ms.trail_id = t.id AND ms.user_id = a.user_id
      WHERE a.id = $1
        AND a.user_id = $2
        AND a.geometry IS NOT NULL
-       AND utp.completion_percentage > 0
-     ORDER BY utp.completion_percentage DESC`,
+       AND (utp.completed_distance + COALESCE(ms.manual_m, 0)) > 0
+     ORDER BY completion_percentage DESC`,
     [activityDbId, userId, BUFFER_METRES]
   );
   return rows;
@@ -89,13 +111,30 @@ function getAppUrl(): string {
   return "mytraillog.com";
 }
 
-function buildTrailBlock(matches: TrailMatch[]): string {
+// Strava's measurement_preference is only present on the *detailed* athlete
+// representation (captured once, at OAuth connect — see auth/strava/callback).
+// It can be NULL for users who connected before that existed, or if that
+// fetch failed at the time. distance_unit is the dashboard's own km/mi
+// toggle, persisted server-side specifically to serve as that fallback.
+async function resolveDistanceUnit(userId: string): Promise<DistanceUnit> {
+  const { rows } = await pool.query<{ measurement_preference: string | null; distance_unit: string | null }>(
+    "SELECT measurement_preference, distance_unit FROM users WHERE id = $1",
+    [userId]
+  );
+  const row = rows[0];
+  if (row?.measurement_preference === "feet") return "mi";
+  if (row?.measurement_preference === "meters") return "km";
+  return row?.distance_unit === "mi" ? "mi" : "km";
+}
+
+function buildTrailBlock(matches: TrailMatch[], unit: DistanceUnit): string {
+  const label = unitLabel(unit);
   const lines = matches.map((m) => {
-    const actKm = (m.activity_trail_distance_m / 1000).toFixed(1);
-    const completedKm = (m.completed_distance / 1000).toFixed(1);
-    const totalKm = (m.total_distance / 1000).toFixed(1);
+    const actDist = formatDist(m.activity_trail_distance_m, unit);
+    const completedDist = formatDist(m.completed_distance, unit);
+    const totalDist = formatDist(m.total_distance, unit);
     const pct = Math.round(m.completion_percentage);
-    return `🥾 ${m.name}: ${actKm}km (${pct}% · ${completedKm}km / ${totalKm}km)`;
+    return `🥾 ${m.name}: ${actDist}${label} (${pct}% total · ${completedDist}/${totalDist}${label})`;
   });
   return `\n\n${lines.join("\n")}\n${getAppUrl()}`;
 }
@@ -125,6 +164,7 @@ export async function writeTrailDescription(
   }
 
   const token = await getValidAccessToken(userId);
+  const unit = await resolveDistanceUnit(userId);
 
   if (rateLimiter) await rateLimiter.waitForSlot();
   const getRes = await fetchStrava(
@@ -142,12 +182,14 @@ export async function writeTrailDescription(
   const activity = await getRes.json();
   const currentDesc: string = activity.description ?? "";
 
-  // Strip any existing My Trail Log block — handles old format (with 🥾 header) and new format (trail lines + mytraillog.com)
+  // Strip any existing My Trail Log block — handles old format (with 🥾
+  // header) and current format (trail lines + mytraillog.com). Matches
+  // either km or mi so switching units doesn't leave a stale block behind.
   const baseDesc = currentDesc
     .replace(/\n\n🥾 My Trail Log[\s\S]*$/, "")
-    .replace(/\n\n(?:[^\n]+: \d+\.\d+km[^\n]*\n)+mytraillog\.\S+[^\n]*$/, "")
+    .replace(/\n\n(?:[^\n]+: \d+\.\d+(?:km|mi)[^\n]*\n)+mytraillog\.\S+[^\n]*$/, "")
     .trimEnd();
-  const newDesc = baseDesc + buildTrailBlock(matches);
+  const newDesc = baseDesc + buildTrailBlock(matches, unit);
 
   if (newDesc === currentDesc.trimEnd()) return false;
 

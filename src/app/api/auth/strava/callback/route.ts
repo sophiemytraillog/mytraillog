@@ -52,6 +52,26 @@ export async function GET(request: NextRequest) {
   const athlete = data.athlete;
   console.log("[strava/callback] Token exchange OK. Athlete:", athlete?.firstname, athlete?.lastname);
 
+  // measurement_preference ("feet"/"meters") only appears on the *detailed*
+  // athlete representation — the summary object embedded in the token
+  // exchange response above doesn't include it. Best-effort: a failure here
+  // shouldn't block login, description writes just fall back to the
+  // dashboard's km/mi toggle instead.
+  let measurementPreference: string | null = null;
+  try {
+    const athleteRes = await fetch("https://www.strava.com/api/v3/athlete", {
+      headers: { Authorization: `Bearer ${data.access_token}` },
+    });
+    if (athleteRes.ok) {
+      const detailed = await athleteRes.json();
+      measurementPreference = detailed.measurement_preference ?? null;
+    } else {
+      console.warn("[strava/callback] Detailed athlete fetch failed:", athleteRes.status);
+    }
+  } catch (err) {
+    console.warn("[strava/callback] Detailed athlete fetch errored:", err);
+  }
+
   // Upsert user into the database — tokens live here, not in cookies
   let dbUserId: string | null = null;
   try {
@@ -59,8 +79,8 @@ export async function GET(request: NextRequest) {
       `INSERT INTO users (
         strava_id, username, first_name, last_name, profile_image_url,
         strava_access_token, strava_refresh_token, strava_token_expires_at,
-        strava_scope
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8), $9)
+        strava_scope, measurement_preference
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8), $9, $10)
       ON CONFLICT (strava_id) DO UPDATE SET
         username                = EXCLUDED.username,
         first_name              = EXCLUDED.first_name,
@@ -70,6 +90,7 @@ export async function GET(request: NextRequest) {
         strava_refresh_token    = EXCLUDED.strava_refresh_token,
         strava_token_expires_at = EXCLUDED.strava_token_expires_at,
         strava_scope            = EXCLUDED.strava_scope,
+        measurement_preference  = EXCLUDED.measurement_preference,
         updated_at              = NOW()
       RETURNING id`,
       [
@@ -82,6 +103,7 @@ export async function GET(request: NextRequest) {
         data.refresh_token,
         data.expires_at,
         data.scope ?? null,
+        measurementPreference,
       ]
     );
     dbUserId = result.rows[0]?.id ?? null;

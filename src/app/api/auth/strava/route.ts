@@ -9,8 +9,11 @@ export async function GET() {
     client_id: process.env.STRAVA_CLIENT_ID!,
     redirect_uri: process.env.STRAVA_REDIRECT_URI!,
     response_type: "code",
-    approval_prompt: "auto",
-    scope: "activity:read_all,activity:write",
+    approval_prompt: "force",
+    // profile:read_all is required for measurement_preference on the
+    // detailed athlete object (GET /athlete) — without it Strava silently
+    // returns the summary athlete (resource_state 2) with that field absent.
+    scope: "activity:read_all,activity:write,profile:read_all",
     state,
   });
 
