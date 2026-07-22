@@ -113,11 +113,7 @@ export async function GET(request: NextRequest) {
     console.error("[strava/callback] DB upsert failed:", err);
   }
 
-  // TEMPORARY: autoSync disabled while Sophie reconnects to recover a lost
-  // strava_user_id cookie — her data's already fully synced, no need to
-  // trigger SyncButton's auto-fire on this reconnect. Revert to
-  // "/dashboard?autoSync=true" once she confirms the cookie's back.
-  const response = NextResponse.redirect(new URL("/dashboard", request.url));
+  const response = NextResponse.redirect(new URL("/dashboard?autoSync=true", request.url));
 
   const secure = process.env.NODE_ENV === "production";
   const oneYear = 60 * 60 * 24 * 365;
