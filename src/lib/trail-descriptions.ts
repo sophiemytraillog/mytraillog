@@ -185,15 +185,24 @@ export async function writeTrailDescription(
   const activity = await getRes.json();
   const currentDesc: string = activity.description ?? "";
 
-  // Strip any existing My Trail Log block — handles old format (with 🥾
-  // header) and current format (trail lines + mytraillog.com). Matches
-  // either km or mi so switching units doesn't leave a stale block behind.
-  // The leading "\n\n" is optional so this also matches a block written
-  // with nothing before it (activity had no description at the time).
+  // Strip every existing My Trail Log block, wherever it sits in the
+  // description — not just one anchored to the end. Some users run other
+  // apps (e.g. summitbag, Wandrer) that also append to the same
+  // description; once a third-party app's text ends up after one of our
+  // blocks, an end-anchored strip can never find that block again on later
+  // runs, leaving it permanently orphaned mid-description while a fresh
+  // block keeps getting appended after the other app's text. Matching
+  // globally finds every occurrence regardless of position. Handles the
+  // legacy "🥾 My Trail Log" header format, the current per-trail-line
+  // format (either km or mi), and tolerates the odd "mytraillog . com"
+  // spacing/trailing characters seen in older writes. Any blank-line gaps
+  // left behind by removed blocks get collapsed before re-appending one
+  // fresh block.
   const baseDesc = currentDesc
-    .replace(/(?:\n\n)?🥾 My Trail Log[\s\S]*$/, "")
-    .replace(/(?:\n\n)?(?:[^\n]+: \d+\.\d+(?:km|mi)[^\n]*\n)+mytraillog\.\S+[^\n]*$/, "")
-    .trimEnd();
+    .replace(/🥾 My Trail Log[\s\S]*?(?=\r?\n\r?\n|$)/g, "")
+    .replace(/(?:[^\n]+:\s*\d+\.\d+\s*(?:km|mi)\s*\([^\n]*\)\n)+mytraillog\s*\.?\s*com[^\n]*\n?/gi, "")
+    .replace(/[ \t]*(?:\r?\n){2,}/g, "\n\n")
+    .trim();
   const trailBlock = buildTrailBlock(matches, unit);
   // Exactly one blank line of separation when there's existing text to
   // separate from; no leading blank lines at all when there isn't.
