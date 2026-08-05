@@ -127,6 +127,9 @@ async function resolveDistanceUnit(userId: string): Promise<DistanceUnit> {
   return row?.distance_unit === "mi" ? "mi" : "km";
 }
 
+// No leading/trailing blank lines here — separation from any existing
+// description text is the caller's job (writeTrailDescription), since only
+// it knows whether there's anything to separate from.
 function buildTrailBlock(matches: TrailMatch[], unit: DistanceUnit): string {
   const label = unitLabel(unit);
   const lines = matches.map((m) => {
@@ -136,7 +139,7 @@ function buildTrailBlock(matches: TrailMatch[], unit: DistanceUnit): string {
     const pct = Math.round(m.completion_percentage);
     return `🥾 ${m.name}: ${actDist}${label} (${pct}% total · ${completedDist}/${totalDist}${label})`;
   });
-  return `\n\n${lines.join("\n")}\n${getAppUrl()}`;
+  return `${lines.join("\n")}\n${getAppUrl()}`;
 }
 
 /**
@@ -185,11 +188,16 @@ export async function writeTrailDescription(
   // Strip any existing My Trail Log block — handles old format (with 🥾
   // header) and current format (trail lines + mytraillog.com). Matches
   // either km or mi so switching units doesn't leave a stale block behind.
+  // The leading "\n\n" is optional so this also matches a block written
+  // with nothing before it (activity had no description at the time).
   const baseDesc = currentDesc
-    .replace(/\n\n🥾 My Trail Log[\s\S]*$/, "")
-    .replace(/\n\n(?:[^\n]+: \d+\.\d+(?:km|mi)[^\n]*\n)+mytraillog\.\S+[^\n]*$/, "")
+    .replace(/(?:\n\n)?🥾 My Trail Log[\s\S]*$/, "")
+    .replace(/(?:\n\n)?(?:[^\n]+: \d+\.\d+(?:km|mi)[^\n]*\n)+mytraillog\.\S+[^\n]*$/, "")
     .trimEnd();
-  const newDesc = baseDesc + buildTrailBlock(matches, unit);
+  const trailBlock = buildTrailBlock(matches, unit);
+  // Exactly one blank line of separation when there's existing text to
+  // separate from; no leading blank lines at all when there isn't.
+  const newDesc = baseDesc ? `${baseDesc}\n\n${trailBlock}` : trailBlock;
 
   if (newDesc === currentDesc.trimEnd()) return false;
 
