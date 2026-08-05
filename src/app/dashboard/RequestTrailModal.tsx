@@ -49,9 +49,17 @@ export default function RequestTrailModal({ initialName = "", onClose }: Props) 
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
       onClick={onClose}
     >
+      {/*
+        Leaflet's own panes/controls use z-index up to 1000 (see
+        leaflet/dist/leaflet.css — .leaflet-pane: 400-700, .leaflet-top/
+        .leaflet-bottom controls: 1000), well above Tailwind's z-50 this
+        modal used before. z-[9999] on this fixed, full-viewport wrapper
+        clears all of that, and the backdrop below inherits the same
+        stacking context so it covers the map too, not just the modal card.
+      */}
       <div className="absolute inset-0 bg-black/30" />
 
       <div
