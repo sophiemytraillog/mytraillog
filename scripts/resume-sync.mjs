@@ -243,17 +243,19 @@ async function matchAllTrailsForUser(userId) {
   const { rows: trails } = await pool.query("SELECT id, name FROM trails ORDER BY name");
   let matched = 0;
   for (const trail of trails) {
-    const client = await pool.connect();
-    // Without this, a transient connection drop (which does happen over a
-    // long-running loop touching ~1180 trails) fires an unhandled 'error'
-    // event on the pg Client and crashes the whole process — pool.connect()
-    // reuses client objects, so a stale listener from theoretically wrong;
-    // still, always attach fresh so nothing is ever unhandled.
-    client.removeAllListeners("error");
-    client.on("error", (err) => {
-      console.error(`    connection error on ${trail.name}:`, err.message);
-    });
+    // pool.connect() itself can throw (e.g. a transient DNS blip on a
+    // long-running loop touching ~1180 trails — observed in practice) and
+    // was previously OUTSIDE any try/catch, crashing the whole script and
+    // losing all progress on whatever trail came next alphabetically.
+    // Everything for this trail, including acquiring the connection, now
+    // lives inside the try block so one bad trail just gets skipped.
+    let client;
     try {
+      client = await pool.connect();
+      client.removeAllListeners("error");
+      client.on("error", (err) => {
+        console.error(`    connection error on ${trail.name}:`, err.message);
+      });
       await client.query("BEGIN");
       await client.query("SET LOCAL statement_timeout = '180000'");
       const result = await client.query(MATCH_SQL, [userId, trail.id, includeCycling, cyclingTypes]);
@@ -271,10 +273,10 @@ async function matchAllTrailsForUser(userId) {
         console.log(`    matched: ${trail.name}`);
       }
     } catch (err) {
-      await client.query("ROLLBACK").catch(() => {});
+      await client?.query("ROLLBACK").catch(() => {});
       console.error(`    error on ${trail.name}:`, err.message);
     } finally {
-      client.release();
+      client?.release();
     }
   }
   return matched;
