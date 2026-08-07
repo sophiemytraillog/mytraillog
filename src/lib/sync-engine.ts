@@ -11,6 +11,7 @@ import {
   ScopeError,
   StravaRateLimitError,
 } from "@/lib/trail-descriptions";
+import { logSyncEvent } from "@/lib/sync-log";
 
 const PER_PAGE = 30;
 const PAGE_DELAY_MS = 2000;
@@ -67,6 +68,14 @@ export async function runSyncChunk(
   let saved = 0;
   const newDbIds: string[] = [];
 
+  // Every return point in this function should exit through here so
+  // sync_log always has a record of how the chunk ended, without repeating
+  // a log call at each individual return site.
+  const logAndReturn = (result: SyncChunkResult): SyncChunkResult => {
+    logSyncEvent(userId, "sync_chunk_result", { ...result, newDbIds: result.status === "complete" || result.status === "partial" ? result.newDbIds.length : undefined });
+    return result;
+  };
+
   try {
     const accessToken = await getValidAccessToken(userId);
 
@@ -75,7 +84,17 @@ export async function runSyncChunk(
       for (const activity of activities) {
         const type = activity.sport_type || activity.type;
         if (!ALL_TRACKED_ACTIVITY_TYPES.has(type)) continue;
-        const wkt = decodePolylineToWKT(activity.map?.summary_polyline);
+        const rawPolyline = activity.map?.summary_polyline ?? null;
+        const wkt = decodePolylineToWKT(rawPolyline);
+        // Only worth flagging when Strava gave us a polyline and decoding it
+        // still failed (malformed data) — a null polyline (manual entry,
+        // indoor activity, privacy zone) is normal and not an error.
+        if (rawPolyline && !wkt) {
+          logSyncEvent(userId, "polyline_decode_failed", {
+            strava_activity_id: activity.id,
+            name: activity.name,
+          });
+        }
         const result = await pool.query<{ id: string }>(
           `INSERT INTO activities (
              user_id, strava_activity_id, name, activity_type,
@@ -87,7 +106,7 @@ export async function runSyncChunk(
           [
             userId, activity.id, activity.name, type,
             activity.distance, activity.moving_time, activity.start_date,
-            activity.map?.summary_polyline ?? null, wkt,
+            rawPolyline, wkt,
           ]
         );
         if ((result.rowCount ?? 0) > 0) { pageNew++; newDbIds.push(result.rows[0].id); }
@@ -125,6 +144,7 @@ export async function runSyncChunk(
       "UPDATE users SET sync_status = 'syncing', sync_progress_at = NOW() WHERE id = $1",
       [userId]
     );
+    logSyncEvent(userId, "sync_chunk_started", { existingCount, resuming: existingCount > 0 });
     onProgress({ fetched: 0, saved: 0, message: existingCount > 0 ? "Checking for new activities…" : "Starting sync…" });
 
     // ── Forward pass: activities newer than what we have ──────────────────
@@ -133,14 +153,14 @@ export async function runSyncChunk(
     // would walk the user's ENTIRE history — duplicating the backward pass below.
     if (afterUnix !== null) {
       for (let page = 1; ; page++) {
-        if (aborted()) return { status: "partial", fetched, saved, newDbIds };
-        if (overBudget()) return { status: "partial", fetched, saved, newDbIds };
+        if (aborted()) return logAndReturn({ status: "partial", fetched, saved, newDbIds });
+        if (overBudget()) return logAndReturn({ status: "partial", fetched, saved, newDbIds });
         if (page > 1) await new Promise<void>((r) => setTimeout(r, PAGE_DELAY_MS));
 
         const activities = await fetchPage({ page, after: afterUnix });
         if (activities === "rate_limited") {
           await pool.query("UPDATE users SET sync_status = 'error' WHERE id = $1", [userId]).catch(() => {});
-          return { status: "rate_limited", message: "Strava rate limit reached. Please try again in a few minutes." };
+          return logAndReturn({ status: "rate_limited", message: "Strava rate limit reached. Please try again in a few minutes." });
         }
         if (activities.length === 0) break;
 
@@ -157,8 +177,8 @@ export async function runSyncChunk(
     if (cursor !== null || existingCount === 0) {
       onProgress({ fetched, saved, message: "Checking for older activities…" });
       while (true) {
-        if (aborted()) return { status: "partial", fetched, saved, newDbIds };
-        if (overBudget()) return { status: "partial", fetched, saved, newDbIds };
+        if (aborted()) return logAndReturn({ status: "partial", fetched, saved, newDbIds });
+        if (overBudget()) return logAndReturn({ status: "partial", fetched, saved, newDbIds });
         await new Promise<void>((r) => setTimeout(r, PAGE_DELAY_MS));
 
         const params: Record<string, string | number> = {};
@@ -166,7 +186,7 @@ export async function runSyncChunk(
         const activities = await fetchPage(params);
         if (activities === "rate_limited") {
           await pool.query("UPDATE users SET sync_status = 'error' WHERE id = $1", [userId]).catch(() => {});
-          return { status: "rate_limited", message: "Strava rate limit reached. Please try again in a few minutes." };
+          return logAndReturn({ status: "rate_limited", message: "Strava rate limit reached. Please try again in a few minutes." });
         }
         if (activities.length === 0) break;
 
@@ -185,12 +205,12 @@ export async function runSyncChunk(
       `UPDATE users SET sync_status = 'complete', last_synced_at = NOW() WHERE id = $1`,
       [userId]
     );
-    return { status: "complete", fetched, saved, newDbIds };
+    return logAndReturn({ status: "complete", fetched, saved, newDbIds });
   } catch (err) {
     const message = err instanceof Error ? err.message : "An unexpected error occurred";
     console.error("[sync-engine] runSyncChunk error:", err);
     await pool.query("UPDATE users SET sync_status = 'error' WHERE id = $1", [userId]).catch(() => {});
-    return { status: "error", message };
+    return logAndReturn({ status: "error", message });
   }
 }
 
@@ -218,11 +238,29 @@ export async function finishSync(
       [newDbIds]
     );
     const trailIds = nearbyTrails.map((r) => r.id);
+    logSyncEvent(userId, "matching_triggered", { newActivities: newDbIds.length, nearbyTrails: trailIds.length });
     if (trailIds.length > 0) {
       matchedTrails = await computeTrailProgress(userId, trailIds);
     }
+    logSyncEvent(userId, "matching_complete", { matchedTrails });
+
+    // Anomaly check: this batch of new activities had geometry and sat near
+    // at least one trail, but produced zero progress rows — worth a flag to
+    // review even though it's not always wrong (e.g. the activity's actual
+    // GPS track legitimately never gets within the 50m trail buffer despite
+    // the coarser pre-filter finding it nearby).
+    if (trailIds.length > 0 && matchedTrails === 0) {
+      logSyncEvent(userId, "sync_anomaly", {
+        reason: "activities_near_trails_but_zero_matches",
+        newActivities: newDbIds.length,
+        nearbyTrails: trailIds.length,
+      });
+    }
   } catch (err) {
     console.error("[sync-engine] finishSync matching error:", err);
+    logSyncEvent(userId, "matching_error", {
+      message: err instanceof Error ? err.message : String(err),
+    });
   }
 
   const { rows: [userPrefs] } = await pool.query<{ strava_description_updates: boolean }>(

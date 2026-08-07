@@ -1,11 +1,8 @@
 import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
 import { query } from "@/lib/db";
-
-// Only this account can ever see this page — everyone else, including other
-// logged-in users, gets a 404 (not a redirect/403) so the page's existence
-// isn't revealed.
-const ADMIN_USER_ID = "2f0be392-d997-4225-8da4-1ce434d05f89"; // Sophie
+import { ADMIN_USER_ID } from "@/lib/admin";
+import RematchButton from "./RematchButton";
 
 // Keep in sync with DAILY_UPDATE_BUDGET in src/app/api/update-descriptions/route.ts —
 // backfill_api_usage is the only Strava call counter this app keeps; there's no
@@ -50,6 +47,9 @@ interface UserRow {
   created_at: string;
   activity_count: string;
   trail_match_count: string;
+  sync_status: string;
+  stale_sync: boolean;
+  geometry_count: string;
 }
 
 function formatDate(d: string | Date): string {
@@ -112,13 +112,15 @@ export default async function AdminPage() {
     `SELECT calls_used FROM backfill_api_usage WHERE usage_date = CURRENT_DATE`
   );
   const usersResult = await query<UserRow>(
-    `SELECT u.id, u.first_name, u.last_name, u.created_at,
+    `SELECT u.id, u.first_name, u.last_name, u.created_at, u.sync_status,
+            (u.sync_status = 'syncing' AND u.sync_progress_at < NOW() - INTERVAL '3 minutes') AS stale_sync,
             COUNT(DISTINCT a.id)::text AS activity_count,
+            COUNT(DISTINCT a.id) FILTER (WHERE a.geometry IS NOT NULL)::text AS geometry_count,
             COUNT(DISTINCT utp.trail_id)::text AS trail_match_count
      FROM users u
      LEFT JOIN activities a ON a.user_id = u.id
      LEFT JOIN user_trail_progress utp ON utp.user_id = u.id
-     GROUP BY u.id, u.first_name, u.last_name, u.created_at
+     GROUP BY u.id, u.first_name, u.last_name, u.created_at, u.sync_status, u.sync_progress_at
      ORDER BY u.created_at DESC`
   );
 
@@ -215,25 +217,42 @@ export default async function AdminPage() {
                 <tr className="text-left text-[#8A7F72] text-xs border-b border-[#E5DED4]">
                   <th className="px-4 py-2 font-medium">Name</th>
                   <th className="px-4 py-2 font-medium">Joined</th>
+                  <th className="px-4 py-2 font-medium">Sync status</th>
                   <th className="px-4 py-2 font-medium text-right">Activities</th>
                   <th className="px-4 py-2 font-medium text-right">Trails matched</th>
+                  <th className="px-4 py-2 font-medium">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E5DED4]">
-                {users.map((u) => (
-                  <tr key={u.id}>
-                    <td className="px-4 py-2.5 text-[#2C2520]">
-                      {u.first_name} {u.last_name}
-                    </td>
-                    <td className="px-4 py-2.5 text-[#8A7F72]">{formatDate(u.created_at)}</td>
-                    <td className="px-4 py-2.5 text-[#2C2520] text-right tabular-nums">
-                      {u.activity_count}
-                    </td>
-                    <td className="px-4 py-2.5 text-[#2C2520] text-right tabular-nums">
-                      {u.trail_match_count}
-                    </td>
-                  </tr>
-                ))}
+                {users.map((u) => {
+                  // Same anomaly this whole page exists to catch: activities
+                  // with real geometry but nothing matched to any trail.
+                  const anomaly = parseInt(u.geometry_count) > 0 && parseInt(u.trail_match_count) === 0;
+                  return (
+                    <tr key={u.id}>
+                      <td className="px-4 py-2.5 text-[#2C2520]">
+                        {u.first_name} {u.last_name}
+                      </td>
+                      <td className="px-4 py-2.5 text-[#8A7F72]">{formatDate(u.created_at)}</td>
+                      <td className="px-4 py-2.5">
+                        {u.stale_sync ? (
+                          <span className="text-[#C4652A] font-medium">stuck syncing</span>
+                        ) : (
+                          <span className="text-[#8A7F72]">{u.sync_status}</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-[#2C2520] text-right tabular-nums">
+                        {u.activity_count}
+                      </td>
+                      <td className={`px-4 py-2.5 text-right tabular-nums ${anomaly ? "text-[#C4652A] font-medium" : "text-[#2C2520]"}`}>
+                        {u.trail_match_count}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <RematchButton userId={u.id} />
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

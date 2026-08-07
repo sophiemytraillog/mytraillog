@@ -1,6 +1,8 @@
 import { NextRequest } from "next/server";
 import { cookies } from "next/headers";
 import { runSyncChunk, finishSync } from "@/lib/sync-engine";
+import { pool } from "@/lib/db";
+import { logSyncEvent } from "@/lib/sync-log";
 
 export const dynamic = "force-dynamic";
 // Vercel Hobby plan hard-caps function duration at 60s — this cannot be
@@ -42,10 +44,33 @@ export async function GET(request: NextRequest) {
         });
 
         if (result.status === "partial") {
+          // Tell the client to continue immediately — it closes this
+          // EventSource and opens a fresh one for the next chunk right
+          // away (see SyncButton's "partial" handler), so it never waits
+          // on what happens after this point.
           send("partial", {
             fetched: result.fetched,
             saved: result.saved,
             message: `Syncing… ${result.fetched} fetched, ${result.saved} saved so far`,
+          });
+
+          // Run matching for whatever THIS chunk saved, not just on the
+          // final "complete" chunk — still within this same function
+          // invocation (bounded by the overall 60s ceiling either way), but
+          // after send() so it doesn't delay the client's next chunk.
+          // Root cause of matches silently going missing for multi-chunk
+          // syncs: newDbIds only ever held the CURRENT chunk's activities
+          // (each chunk is a fresh runSyncChunk() call with its own
+          // in-memory array, nothing persisted across chunks). Only calling
+          // finishSync on "complete" meant every activity saved by an
+          // earlier chunk that never got revisited — e.g. because the
+          // browser tab closed mid-sync — was saved to the DB but never
+          // matched against any trail. Matching every chunk, partial or
+          // not, makes each chunk's activities count on their own, so a
+          // sync that never reaches "complete" still leaves the user with
+          // real matches for whatever did get fetched, instead of zero.
+          await finishSync(userId, result.newDbIds).catch((err) => {
+            console.error("[sync/activities] finishSync on partial chunk failed:", err);
           });
           return;
         }
@@ -64,6 +89,28 @@ export async function GET(request: NextRequest) {
         });
 
         const { matchedTrails } = await finishSync(userId, result.newDbIds);
+
+        // Whole-account verification, not just this chunk: a user whose
+        // activities all have geometry but ended up with zero trail
+        // matches anywhere is worth flagging for review, even though it
+        // can legitimately happen (their routes genuinely don't overlap
+        // any trail in the database).
+        try {
+          const { rows: [counts] } = await pool.query<{ geom_count: string; match_count: string }>(
+            `SELECT
+               (SELECT COUNT(*) FROM activities WHERE user_id = $1 AND geometry IS NOT NULL) AS geom_count,
+               (SELECT COUNT(*) FROM user_trail_progress WHERE user_id = $1) AS match_count`,
+            [userId]
+          );
+          if (parseInt(counts.geom_count) > 0 && parseInt(counts.match_count) === 0) {
+            logSyncEvent(userId, "sync_anomaly", {
+              reason: "account_has_geometry_but_zero_trail_matches",
+              activitiesWithGeometry: parseInt(counts.geom_count),
+            });
+          }
+        } catch (err) {
+          console.error("[sync/activities] Post-sync verification query failed:", err);
+        }
 
         // Sent once trail matching (and description writes) have actually
         // landed in the DB — the client waits for this before refreshing the

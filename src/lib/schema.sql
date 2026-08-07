@@ -149,6 +149,24 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS distance_unit          TEXT NOT NULL 
 -- skip pairs that are already done instead of recomputing them.
 ALTER TABLE user_trail_progress ADD COLUMN IF NOT EXISTS activity_matches_computed_at TIMESTAMPTZ;
 
+-- Durable, queryable record of every step of the sync -> matching pipeline
+-- for a given user, replacing scattered console.log calls that only exist
+-- in Vercel's ephemeral function logs. event is a short machine-readable
+-- tag (e.g. 'sync_chunk_complete', 'matching_complete', 'sync_anomaly');
+-- detail holds whatever structured context that step has (counts, trail ids,
+-- error messages). Queried by /admin and the stale-sync cron sweep to show
+-- exactly what happened for a given user without needing DB access.
+CREATE TABLE IF NOT EXISTS sync_log (
+  id         BIGSERIAL PRIMARY KEY,
+  user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  event      TEXT NOT NULL,
+  detail     JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_sync_log_user_id_created_at
+  ON sync_log (user_id, created_at DESC);
+
 -- Global (app-wide, not per-user) daily counter for the historical
 -- description-update backlog scan in update-descriptions/route.ts. Strava's
 -- rate limit is enforced per-application across all users combined, so this
@@ -202,6 +220,7 @@ ALTER TABLE user_trail_manual_segments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trail_requests             ENABLE ROW LEVEL SECURITY;
 ALTER TABLE activity_trail_matches     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE backfill_api_usage         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sync_log                   ENABLE ROW LEVEL SECURITY;
 
 -- Trails are public reference data — allow anyone to read them
 DO $$

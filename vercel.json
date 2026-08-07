@@ -6,6 +6,15 @@
     },
     "src/app/api/update-descriptions/route.ts": {
       "maxDuration": 60
+    },
+    "src/app/api/cron/resume-stuck-syncs/route.ts": {
+      "maxDuration": 60
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/resume-stuck-syncs",
+      "schedule": "0 3 * * *"
+    }
+  ]
 }
