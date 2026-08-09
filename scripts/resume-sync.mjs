@@ -235,50 +235,128 @@ const ACTIVITY_MATCH_SQL = `
     AND ST_DWithin(a.geometry::geography, t_simplified.geometry::geography, 250)
   ON CONFLICT (activity_id, trail_id) DO NOTHING`;
 
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+const MAX_ATTEMPTS = 3;
+const RETRY_DELAY_MS = 1_500;
+
+// One (user, trail) attempt: match + activity_trail_matches + checkpoint,
+// all as a single unit. pool.connect() itself lives inside the try (a
+// transient DNS blip acquiring the connection was previously OUTSIDE any
+// try/catch and crashed the whole ~1180-trail loop, losing all progress on
+// whatever trail came next alphabetically — observed in practice recovering
+// Paul Crowe's account). Returns true only if the checkpoint was written,
+// i.e. this trail is now durably marked "checked" and won't be re-attempted
+// on a future run.
+async function attemptTrail(pool, userId, trail, includeCycling, cyclingTypes) {
+  let client;
+  try {
+    client = await pool.connect();
+    client.removeAllListeners("error");
+    client.on("error", (err) => {
+      console.error(`    connection error on ${trail.name}:`, err.message);
+    });
+    await client.query("BEGIN");
+    await client.query("SET LOCAL statement_timeout = '180000'");
+    const result = await client.query(MATCH_SQL, [userId, trail.id, includeCycling, cyclingTypes]);
+    await client.query("COMMIT");
+    const wasMatched = (result.rowCount ?? 0) > 0;
+
+    if (wasMatched) {
+      await client.query("BEGIN");
+      await client.query("SET LOCAL statement_timeout = '180000'");
+      await client.query(ACTIVITY_MATCH_SQL, [userId, trail.id, includeCycling, cyclingTypes]);
+      await client.query(
+        "UPDATE user_trail_progress SET activity_matches_computed_at = NOW() WHERE user_id = $1 AND trail_id = $2",
+        [userId, trail.id]
+      );
+      await client.query("COMMIT");
+    }
+
+    await pool.query(
+      `INSERT INTO trail_match_checks (user_id, trail_id, matched) VALUES ($1, $2, $3)
+       ON CONFLICT (user_id, trail_id) DO UPDATE SET matched = EXCLUDED.matched, checked_at = NOW()`,
+      [userId, trail.id, wasMatched]
+    );
+
+    if (wasMatched) console.log(`    matched: ${trail.name}`);
+    return true;
+  } catch (err) {
+    await client?.query("ROLLBACK").catch(() => {});
+    console.error(`    error on ${trail.name}:`, err.message);
+    return false;
+  } finally {
+    client?.release();
+  }
+}
+
+async function attemptTrailWithRetry(pool, userId, trail, includeCycling, cyclingTypes) {
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    if (await attemptTrail(pool, userId, trail, includeCycling, cyclingTypes)) return true;
+    if (attempt < MAX_ATTEMPTS) {
+      console.log(`    retrying ${trail.name} in ${RETRY_DELAY_MS}ms (attempt ${attempt + 1}/${MAX_ATTEMPTS})…`);
+      await sleep(RETRY_DELAY_MS);
+    }
+  }
+  return false;
+}
+
+// Resumable via trail_match_checks: re-running this script (e.g. after a
+// crash) only ever queries trails NOT already checked for this user, so it
+// picks up exactly where it left off instead of re-walking the whole table
+// alphabetically from "A" every time. National Trails (category =
+// 'national_trail', the ~20 users actually look at) are always processed
+// before the 1,100+ other long-distance paths.
 async function matchAllTrailsForUser(userId) {
   const { rows: [prefs] } = await pool.query("SELECT include_cycling FROM users WHERE id = $1", [userId]);
   const includeCycling = prefs?.include_cycling ?? false;
   const cyclingTypes = Array.from(CYCLING_ACTIVITY_TYPES);
 
-  const { rows: trails } = await pool.query("SELECT id, name FROM trails ORDER BY name");
   let matched = 0;
-  for (const trail of trails) {
-    // pool.connect() itself can throw (e.g. a transient DNS blip on a
-    // long-running loop touching ~1180 trails — observed in practice) and
-    // was previously OUTSIDE any try/catch, crashing the whole script and
-    // losing all progress on whatever trail came next alphabetically.
-    // Everything for this trail, including acquiring the connection, now
-    // lives inside the try block so one bad trail just gets skipped.
-    let client;
-    try {
-      client = await pool.connect();
-      client.removeAllListeners("error");
-      client.on("error", (err) => {
-        console.error(`    connection error on ${trail.name}:`, err.message);
-      });
-      await client.query("BEGIN");
-      await client.query("SET LOCAL statement_timeout = '180000'");
-      const result = await client.query(MATCH_SQL, [userId, trail.id, includeCycling, cyclingTypes]);
-      await client.query("COMMIT");
-      if ((result.rowCount ?? 0) > 0) {
-        matched++;
-        await client.query("BEGIN");
-        await client.query("SET LOCAL statement_timeout = '180000'");
-        await client.query(ACTIVITY_MATCH_SQL, [userId, trail.id, includeCycling, cyclingTypes]);
-        await client.query(
-          "UPDATE user_trail_progress SET activity_matches_computed_at = NOW() WHERE user_id = $1 AND trail_id = $2",
+  const stillFailing = [];
+
+  while (true) {
+    const { rows: batch } = await pool.query(
+      `SELECT t.id, t.name
+       FROM trails t
+       WHERE NOT EXISTS (SELECT 1 FROM trail_match_checks c WHERE c.user_id = $1 AND c.trail_id = t.id)
+       ORDER BY (t.category = 'national_trail') DESC, t.name ASC
+       LIMIT 50`,
+      [userId]
+    );
+    if (batch.length === 0) break;
+
+    for (const trail of batch) {
+      const ok = await attemptTrailWithRetry(pool, userId, trail, includeCycling, cyclingTypes);
+      if (ok) {
+        const { rows } = await pool.query(
+          "SELECT matched FROM trail_match_checks WHERE user_id = $1 AND trail_id = $2",
           [userId, trail.id]
         );
-        await client.query("COMMIT");
-        console.log(`    matched: ${trail.name}`);
+        if (rows[0]?.matched) matched++;
+      } else {
+        console.error(`    giving up on ${trail.name} after ${MAX_ATTEMPTS} attempts — will retry at the end`);
+        stillFailing.push(trail);
       }
-    } catch (err) {
-      await client?.query("ROLLBACK").catch(() => {});
-      console.error(`    error on ${trail.name}:`, err.message);
-    } finally {
-      client?.release();
     }
   }
+
+  // Come back to anything that failed all its attempts, once, now that the
+  // rest of the table is done — often enough for a transient issue to have
+  // cleared by then.
+  for (const trail of stillFailing) {
+    const ok = await attemptTrailWithRetry(pool, userId, trail, includeCycling, cyclingTypes);
+    if (ok) {
+      const { rows } = await pool.query(
+        "SELECT matched FROM trail_match_checks WHERE user_id = $1 AND trail_id = $2",
+        [userId, trail.id]
+      );
+      if (rows[0]?.matched) matched++;
+    }
+  }
+
   return matched;
 }
 

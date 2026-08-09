@@ -167,6 +167,25 @@ CREATE TABLE IF NOT EXISTS sync_log (
 CREATE INDEX IF NOT EXISTS idx_sync_log_user_id_created_at
   ON sync_log (user_id, created_at DESC);
 
+-- Definitive "have we attempted this (user, trail) pair" record, written by
+-- computeTrailProgress after each trail it processes — regardless of
+-- whether a match was found. user_trail_progress alone can't answer this:
+-- a trail with genuinely zero overlap never gets a row there (see the
+-- south-downs-way / north-downs-way investigation — WHERE covered_geom IS
+-- NOT NULL means no row is inserted for a legitimate no-match), so it's
+-- indistinguishable from "never checked yet". A full-account backfill walk
+-- (the /admin rematch route, scripts/resume-sync.mjs) queries trails NOT
+-- in this table for a user to know what's actually left to do, instead of
+-- a fragile client-held offset into an alphabetical scan that restarts
+-- from the top on every crash.
+CREATE TABLE IF NOT EXISTS trail_match_checks (
+  user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  trail_id   UUID NOT NULL REFERENCES trails(id) ON DELETE CASCADE,
+  matched    BOOLEAN NOT NULL,
+  checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, trail_id)
+);
+
 -- Global (app-wide, not per-user) daily counter for the historical
 -- description-update backlog scan in update-descriptions/route.ts. Strava's
 -- rate limit is enforced per-application across all users combined, so this
@@ -221,6 +240,7 @@ ALTER TABLE trail_requests             ENABLE ROW LEVEL SECURITY;
 ALTER TABLE activity_trail_matches     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE backfill_api_usage         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sync_log                   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE trail_match_checks         ENABLE ROW LEVEL SECURITY;
 
 -- Trails are public reference data — allow anyone to read them
 DO $$

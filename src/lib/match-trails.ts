@@ -133,7 +133,8 @@ export async function computeTrailProgress(userId: string, trailIds?: string[]):
       ]);
       await client.query("COMMIT");
 
-      if ((result.rowCount ?? 0) > 0) {
+      const wasMatched = (result.rowCount ?? 0) > 0;
+      if (wasMatched) {
         matched++;
         try {
           await client.query("BEGIN");
@@ -149,9 +150,27 @@ export async function computeTrailProgress(userId: string, trailIds?: string[]):
           await client.query("ROLLBACK").catch(() => {});
         }
       }
+
+      // Record that this pair was actually attempted, regardless of outcome
+      // — a legitimate zero-overlap trail never gets a user_trail_progress
+      // row (see MATCH_SQL's WHERE covered_geom IS NOT NULL), so without
+      // this a full-account sweep can't tell "checked, no match" apart from
+      // "never checked" and would needlessly recheck it forever. Best-effort:
+      // a failure here shouldn't undo the matching work that just succeeded.
+      await pool.query(
+        `INSERT INTO trail_match_checks (user_id, trail_id, matched)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (user_id, trail_id) DO UPDATE SET matched = EXCLUDED.matched, checked_at = NOW()`,
+        [userId, trail.id, wasMatched]
+      ).catch((err) => {
+        console.error(`[match-trails] Failed to record trail_match_checks for trail ${trail.id}:`, err.message);
+      });
     } catch (err) {
       console.error(`[match-trails] Trail ${trail.id} failed:`, err);
       await client.query("ROLLBACK").catch(() => {});
+      // Deliberately NOT checkpointed — this trail genuinely wasn't
+      // processed, so it should be retried on the next sweep rather than
+      // silently treated as done.
     } finally {
       client.release();
     }

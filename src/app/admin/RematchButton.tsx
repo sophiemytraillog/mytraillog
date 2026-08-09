@@ -9,27 +9,27 @@ export default function RematchButton({ userId }: { userId: string }) {
   async function run() {
     setState("running");
     setMessage("");
-    let offset = 0;
     let totalMatched = 0;
 
     try {
-      // Mirrors sync's own partial/continue chunking — a large account's
-      // trail table walk can't finish in one request, so the client keeps
-      // calling with the next offset until the server reports done.
+      // The server tracks progress via trail_match_checks (see
+      // api/admin/rematch), not a client-held offset — so this loop just
+      // keeps calling until the server reports done, and correctly resumes
+      // from wherever a previous run (even from a different browser
+      // session, hours or days ago) left off.
       while (true) {
         const res = await fetch("/api/admin/rematch", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ userId, offset }),
+          body: JSON.stringify({ userId }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error ?? "Request failed");
 
         totalMatched += data.matchedTrails;
-        setMessage(`Checked ${data.nextOffset}/${data.totalTrails} trails…`);
+        setMessage(`Checked ${data.totalChecked}/${data.totalTrails} trails…`);
 
         if (data.done) break;
-        offset = data.nextOffset;
       }
       setState("done");
       setMessage(`${totalMatched} trail${totalMatched === 1 ? "" : "s"} matched`);
