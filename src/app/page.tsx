@@ -121,10 +121,19 @@ function ConnectErrorBanner({ error }: { error?: string }) {
   );
 }
 
+function DeletedBanner({ deleted }: { deleted?: string }) {
+  if (deleted !== "true") return null;
+  return (
+    <div className="max-w-lg mx-auto mb-8 px-4 py-3 rounded-xl bg-[#4A7C59]/10 border border-[#4A7C59]/20 text-[#4A7C59] text-sm text-center">
+      Your data has been deleted and Strava access revoked. Sorry to see you go.
+    </div>
+  );
+}
+
 export default function Home({
   searchParams,
 }: {
-  searchParams?: { error?: string };
+  searchParams?: { error?: string; deleted?: string };
 }) {
   return (
     <div className="min-h-screen">
@@ -159,6 +168,7 @@ export default function Home({
         {/* Hero content */}
         <div className="relative z-10 text-center px-6 max-w-4xl mx-auto">
           <ConnectErrorBanner error={searchParams?.error} />
+          <DeletedBanner deleted={searchParams?.deleted} />
 
           <div className="inline-flex items-center gap-2 bg-[#C4652A]/10 border border-[#C4652A]/20 text-[#C4652A] text-xs font-semibold tracking-[0.12em] uppercase px-4 py-2 rounded-full mb-8">
             <span className="w-1.5 h-1.5 bg-[#C4652A] rounded-full inline-block" />

@@ -7,6 +7,7 @@ import TrailProgressList from "./TrailProgressList";
 import NationalTrailsList from "./NationalTrailsList";
 import UpdateDescriptionsButton from "./UpdateDescriptionsButton";
 import RequestTrailModal from "./RequestTrailModal";
+import DeleteAccountModal from "./DeleteAccountModal";
 import { useDistanceUnit } from "@/app/DistanceUnitProvider";
 import { formatDist, unitLabel } from "@/lib/distance";
 
@@ -104,6 +105,7 @@ export default function DashboardClient({
   const [savingCycling, setSavingCycling] = useState(false);
   const [backfillStatus, setBackfillStatus] = useState<string | null>(null);
   const [requestModalName, setRequestModalName] = useState<string | null>(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
 
   async function toggleDescriptionUpdates(enabled: boolean) {
     setSavingPref(true);
@@ -387,6 +389,18 @@ export default function DashboardClient({
                   ))}
                 </div>
               </div>
+
+              {/* Account deletion — deliberately understated: red text only,
+                  no button chrome, tucked below everything else so it isn't
+                  the visual focus of the settings card. */}
+              <div className="mt-3 pt-3 border-t border-[#E5DED4]">
+                <button
+                  onClick={() => setShowDeleteModal(true)}
+                  className="text-[#C4652A]/70 hover:text-[#C4652A] text-[10px] transition-colors"
+                >
+                  Disconnect &amp; Delete My Data
+                </button>
+              </div>
             </div>
 
             {/* Map */}
@@ -541,6 +555,10 @@ export default function DashboardClient({
           initialName={requestModalName}
           onClose={() => setRequestModalName(null)}
         />
+      )}
+
+      {showDeleteModal && (
+        <DeleteAccountModal onClose={() => setShowDeleteModal(false)} />
       )}
 
       {/* Footer */}
