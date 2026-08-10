@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { type PoolClient } from "pg";
 import { pool } from "@/lib/db";
 
+export const maxDuration = 60;
+
 export async function POST(
   _req: Request,
   { params }: { params: { slug: string } }
@@ -38,6 +40,16 @@ export async function POST(
 
     const manualData = await getManualSegmentsData(client, userId, trail.id);
     return NextResponse.json(manualData);
+  } catch (err) {
+    // Previously unhandled: any failure here (e.g. the MultiLineString/
+    // LineString column-type mismatch that broke this for Centenary Way
+    // and ~63% of trails — see schema.sql) propagated as a raw exception,
+    // which Next.js's App Router turns into an empty/non-JSON response —
+    // exactly what produced the client's "Unexpected end of JSON input"
+    // rather than a real error message.
+    console.error("[mark-complete]", err);
+    const message = err instanceof Error ? err.message : "Unexpected error";
+    return NextResponse.json({ error: message }, { status: 500 });
   } finally {
     client.release();
   }

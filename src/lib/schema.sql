@@ -112,7 +112,16 @@ CREATE TABLE IF NOT EXISTS user_trail_manual_segments (
   user_id         UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   trail_id        UUID        NOT NULL REFERENCES trails(id) ON DELETE CASCADE,
   segment_type    TEXT        NOT NULL CHECK (segment_type IN ('auto_gap_fill', 'manual')),
-  geometry        GEOMETRY(LineString, 4326) NOT NULL,
+  -- Generic GEOMETRY, not GEOMETRY(LineString, 4326): trails.geometry
+  -- itself is 63% MultiLineString (749/1,181 — genuinely multi-part
+  -- trails with real breaks between sections, not a storage artifact —
+  -- confirmed ST_LineMerge doesn't collapse any of them to a single
+  -- line). "Mark whole trail complete" copies a trail's own geometry
+  -- verbatim into this column, so it needs to accept whatever type the
+  -- trail actually is. A LineString-only column made that INSERT throw
+  -- Postgres 22023 for any MultiLineString trail — see the Rosie Dyball
+  -- / Centenary Way investigation.
+  geometry        GEOMETRY(Geometry, 4326) NOT NULL,
   start_fraction  FLOAT,
   end_fraction    FLOAT,
   gap_length_m    FLOAT,
@@ -126,6 +135,26 @@ CREATE INDEX IF NOT EXISTS idx_manual_segments_geometry
   ON user_trail_manual_segments USING GIST (geometry);
 
 -- ── Additive migrations (idempotent) ────────────────────────
+
+-- Widen user_trail_manual_segments.geometry from LineString-only to
+-- generic Geometry — see the CREATE TABLE comment above. Guarded so it
+-- only runs (and only takes an ALTER lock) when the column is still
+-- restricted; a no-op on any database that's already been migrated or
+-- freshly created from the CREATE TABLE above.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM geometry_columns
+    WHERE f_table_name = 'user_trail_manual_segments'
+      AND f_geometry_column = 'geometry'
+      AND type = 'LINESTRING'
+  ) THEN
+    ALTER TABLE user_trail_manual_segments
+      ALTER COLUMN geometry TYPE GEOMETRY(Geometry, 4326);
+  END IF;
+END
+$$;
+
 ALTER TABLE users ADD COLUMN IF NOT EXISTS strava_scope               TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS strava_description_updates BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS include_cycling            BOOLEAN NOT NULL DEFAULT FALSE;

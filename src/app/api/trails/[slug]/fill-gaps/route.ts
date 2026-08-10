@@ -17,11 +17,36 @@ export async function POST(
   try {
     await client.query("SET statement_timeout = '55000'");
 
-    const { rows: [trail] } = await client.query<{ id: string }>(
-      "SELECT id FROM trails WHERE slug = $1",
+    const { rows: [trail] } = await client.query<{ id: string; is_multipart: boolean }>(
+      "SELECT id, GeometryType(geometry) = 'MULTILINESTRING' AS is_multipart FROM trails WHERE slug = $1",
       [params.slug]
     );
     if (!trail) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+    // The gap-detection query below (ST_LineLocatePoint, ST_LineSubstring,
+    // ST_StartPoint/EndPoint for loop detection) is built entirely around a
+    // single continuous LineString parameterised 0..1 along its length.
+    // ~63% of trails (749/1,181) are genuinely multi-part MultiLineStrings
+    // with real breaks between sections — confirmed ST_LineMerge doesn't
+    // collapse any of them into one line, so these aren't a storage
+    // artifact, they're actual gaps in the trail's own official route data.
+    // ST_LineLocatePoint outright errors on MultiLineString input
+    // ("1st arg isn't a line"), so running the query anyway would surface
+    // that raw Postgres error to the user. Failing clearly here instead of
+    // attempting a fix: correctly detecting/filling gaps across disconnected
+    // parts needs the algorithm reworked to handle each part's own 0..1
+    // range plus the boundaries between parts, not a quick patch — a wrong
+    // attempt risks silently "filling" a gap that's an intentional break in
+    // the trail (e.g. a ferry crossing or road diversion the route excludes).
+    if (trail.is_multipart) {
+      return NextResponse.json(
+        {
+          error:
+            "This trail's route data has multiple disconnected sections, which gap-filling doesn't support yet. You can still mark individual sections as walked manually on the map.",
+        },
+        { status: 422 }
+      );
+    }
 
     // Delete existing auto-fills so re-running always reflects current GPS data
     await client.query(
