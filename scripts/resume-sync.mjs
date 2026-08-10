@@ -15,6 +15,19 @@ const { Pool } = pg;
 
 const pool = new Pool({ ssl: { rejectUnauthorized: false } });
 
+// pg emits 'error' on the Pool itself (not on whichever client happens to
+// be mid-query) when an IDLE pooled connection drops. Without this, that's
+// an unhandled EventEmitter 'error' event — fatal to the whole process,
+// bypassing every try/catch here, including the per-trail retry logic
+// below. This is exactly what crashed a real overnight run of this script
+// (see "Connection terminated unexpectedly" / "Emitted 'error' event on
+// BoundPool instance" in node's own crash trace) despite the per-client
+// handlers already in attemptTrail — those only cover the client actively
+// doing work, not other connections sitting idle in the pool.
+pool.on("error", (err) => {
+  console.error("[pool] Idle pool client error:", err.message);
+});
+
 const PER_PAGE = 30;
 const PAGE_DELAY_MS = 2000;
 

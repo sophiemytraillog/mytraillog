@@ -20,6 +20,15 @@ const pool = new Pool({
   idleTimeoutMillis: 60_000,
 });
 
+// pg emits 'error' on the Pool itself (not on whichever client happens to
+// be mid-query) when an IDLE pooled connection drops — otherwise an
+// unhandled EventEmitter 'error' event, fatal to the whole process
+// regardless of any try/catch elsewhere in the script. Confirmed crashing
+// a real long-running matching sweep this way (scripts/resume-sync.mjs).
+pool.on("error", (err) => {
+  console.error("[pool] Idle pool client error:", err.message);
+});
+
 const BUFFER_METRES = 50;
 // ST_SimplifyPreserveTopology(geom, 0.001) can move points by up to ~111 m.
 // Widen the pre-filter to avoid excluding activities that are near the real trail
