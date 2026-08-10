@@ -13,6 +13,54 @@ import {
 } from "@/lib/trail-descriptions";
 import { logSyncEvent } from "@/lib/sync-log";
 
+// Finding which of ~1,180 trails are near a BATCH of activities (as opposed
+// to computeTrailProgress's own per-trail queries, which are always scoped
+// to one known trail) took four attempts to get right — see the Rosie
+// Dyball investigation. In order, all confirmed too slow at real-world
+// scale (373 activities): (1) ST_DWithin on raw t.geometry — Postgres 57014
+// statement timeout outright; (2) ST_DWithin with ST_SimplifyPreserveTopology
+// computed inline — still timed out, since there's no index on an
+// expression computed fresh per call; (3) ST_DWithin against
+// trails.simplified_geometry, a materialized+GIST-indexed column (kept —
+// it's used elsewhere and is good practice) — STILL timed out, because
+// EXPLAIN showed Postgres evaluating ST_DWithin as a brute-force
+// Join Filter across the full activities x trails cross product, never
+// as an Index Cond — a GIST index on a geometry column can't accelerate a
+// ::geography-cast distance predicate here; (4) unioning all the batch's
+// activities into one geometry first, then checking that ONE geometry
+// against each trail — union itself was fast (~2s), but produced a
+// 481,230-point merged geometry, making every one of the 1,181 per-trail
+// comparisons individually expensive.
+//
+// What actually works: skip ST_DWithin/::geography entirely for this
+// discovery step and use the plain geometry `&&` bounding-box overlap
+// operator, which — unlike ST_DWithin on geography — genuinely uses the
+// GIST index. Applied PER ACTIVITY (not one envelope around the whole
+// batch — a user with activities spread across the whole country makes a
+// single combined envelope worthless as a filter, confirmed: it matched
+// 985 of 1,181 trails). ST_Expand(geometry, degrees) grows each activity's
+// own bounding box by pure coordinate arithmetic — no actual buffer
+// geometry gets computed, unlike ST_Buffer, which was also too slow when
+// computed per-row. 0.003° is a deliberately conservative approximation of
+// ~250m (1° latitude ≈ 111km everywhere; longitude shrinks further north,
+// so 0.003° is over-generous at UK latitudes, never under) — this is a
+// coarse candidate list either way, computeTrailProgress still does the
+// precise 50m intersection afterward, so a slightly wider net here only
+// costs a few extra cheap no-coverage checks, never a wrong match.
+const NEARBY_TRAILS_BBOX_DEGREES = 0.003;
+
+// A user with activities scattered nationwide can still legitimately
+// produce hundreds of real candidate trails (confirmed: 245 for a
+// 373-activity account) — processing all of them with computeTrailProgress
+// synchronously could itself exceed whatever budget remains in this
+// invocation (finishSync runs after runSyncChunk has already spent most of
+// Vercel's 60s ceiling). Capping bounds the worst case; trails beyond the
+// cap simply stay unmatched for now and get picked up by a later sync
+// chunk, webhook event, or /admin rematch — same eventually-consistent
+// model as trail_match_checks elsewhere, not a correctness issue, since
+// computeTrailProgress's INSERT ON CONFLICT is idempotent either way.
+const MAX_TRAILS_PER_FINISH_SYNC = 40;
+
 const PER_PAGE = 30;
 const PAGE_DELAY_MS = 2000;
 
@@ -232,13 +280,19 @@ export async function finishSync(
   try {
     const { rows: nearbyTrails } = await pool.query<{ id: string }>(
       `SELECT DISTINCT t.id
-       FROM trails t
-       JOIN activities a ON ST_DWithin(a.geometry::geography, t.geometry::geography, 50)
+       FROM activities a
+       JOIN trails t ON t.simplified_geometry && ST_Expand(a.geometry, ${NEARBY_TRAILS_BBOX_DEGREES})
        WHERE a.id = ANY($1::uuid[]) AND a.geometry IS NOT NULL`,
       [newDbIds]
     );
-    const trailIds = nearbyTrails.map((r) => r.id);
-    logSyncEvent(userId, "matching_triggered", { newActivities: newDbIds.length, nearbyTrails: trailIds.length });
+    const allTrailIds = nearbyTrails.map((r) => r.id);
+    const trailIds = allTrailIds.slice(0, MAX_TRAILS_PER_FINISH_SYNC);
+    logSyncEvent(userId, "matching_triggered", {
+      newActivities: newDbIds.length,
+      nearbyTrails: allTrailIds.length,
+      processing: trailIds.length,
+      deferred: allTrailIds.length - trailIds.length,
+    });
     if (trailIds.length > 0) {
       matchedTrails = await computeTrailProgress(userId, trailIds);
     }

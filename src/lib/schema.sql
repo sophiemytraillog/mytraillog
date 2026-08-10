@@ -186,6 +186,45 @@ CREATE TABLE IF NOT EXISTS trail_match_checks (
   PRIMARY KEY (user_id, trail_id)
 );
 
+-- Pre-computed ST_SimplifyPreserveTopology(geometry, 0.001), materialized
+-- and indexed rather than recomputed inline on every query. Several spatial
+-- pre-filter queries (finishSync's nearbyTrails lookup, backfill-cycling)
+-- need to check a batch of activities against the FULL trails table, and
+-- computing the simplification for all ~1,180 trails inline on every call
+-- is itself expensive — confirmed via direct reproduction to still hit
+-- Postgres's statement timeout (57014) even with the simplification
+-- applied, because there's no way to index an on-the-fly computed column.
+-- Root-caused during the Rosie Dyball investigation: finishSync's
+-- nearbyTrails query (raw, unindexed, uncached) silently killed the whole
+-- serverless function on any sync chunk with more than a handful of new
+-- activities, before it could log anything or run any matching.
+-- Untyped GEOMETRY, not GEOMETRY(LineString, 4326): trails.geometry itself
+-- carries no enforced subtype despite its CREATE TABLE definition above
+-- (schema drift — 749 of 1,180 live rows are actually MultiLineString, not
+-- LineString), and ST_SimplifyPreserveTopology on a MultiLineString input
+-- returns a MultiLineString, which a LineString-typed column would reject.
+ALTER TABLE trails ADD COLUMN IF NOT EXISTS simplified_geometry GEOMETRY(Geometry, 4326);
+
+UPDATE trails SET simplified_geometry = ST_SimplifyPreserveTopology(geometry, 0.001)
+WHERE simplified_geometry IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_trails_simplified_geometry
+  ON trails USING GIST (simplified_geometry);
+
+-- Keeps simplified_geometry correct automatically on every future insert/
+-- update, so no import or edit script needs to remember to set it itself.
+CREATE OR REPLACE FUNCTION trigger_set_simplified_geometry()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  NEW.simplified_geometry = ST_SimplifyPreserveTopology(NEW.geometry, 0.001);
+  RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE TRIGGER trails_set_simplified_geometry
+  BEFORE INSERT OR UPDATE OF geometry ON trails
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_simplified_geometry();
+
 -- Global (app-wide, not per-user) daily counter for the historical
 -- description-update backlog scan in update-descriptions/route.ts. Strava's
 -- rate limit is enforced per-application across all users combined, so this
