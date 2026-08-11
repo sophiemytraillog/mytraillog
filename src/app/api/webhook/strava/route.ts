@@ -13,6 +13,31 @@ import {
   ScopeError,
 } from "@/lib/trail-descriptions";
 
+// A single trail's match computation can legitimately take well over a
+// minute for an active user — ST_Union over hundreds/thousands of nearby
+// activities is genuinely expensive at that scale (confirmed elsewhere:
+// e.g. ~112s for one trail on a ~1,300-activity account). handleNewActivity
+// used to await computeTrailProgress for ALL nearby trails, unbounded,
+// before ever attempting the description write — for a power user this
+// routinely exceeds whatever real execution budget Vercel gives this
+// waitUntil()-deferred background task, killing the whole function before
+// writeTrailDescription is ever reached. No error gets logged either: an
+// abrupt kill doesn't run any catch block. Confirmed happening in practice:
+// a user's evening run had genuine trail matches (activity_trail_matches
+// populated correctly) but its Strava description was never touched.
+// Race matching against this budget so description-writing always gets a
+// chance to run — using whatever matches exist by then, complete or not.
+// (Promise.race doesn't cancel the underlying query; matching keeps
+// running and its results still land, just no longer blocking the write.)
+const TRAIL_MATCHING_TIME_BUDGET_MS = 20_000;
+
+function withTimeBudget<T>(promise: Promise<T>, ms: number): Promise<T | "timed_out"> {
+  return Promise.race([
+    promise,
+    new Promise<"timed_out">((resolve) => setTimeout(() => resolve("timed_out"), ms)),
+  ]);
+}
+
 interface StravaWebhookEvent {
   object_type: "activity" | "athlete";
   aspect_type: "create" | "update" | "delete";
@@ -287,10 +312,19 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number) {
     console.log(
       `[webhook/strava] Saved activity ${activityId}, matching ${trailIds.length} nearby trail(s)…`
     );
-    const matched = await computeTrailProgress(user.id, trailIds.length > 0 ? trailIds : undefined);
-    console.log(
-      `[webhook/strava] Trail matching complete — ${matched} trail(s) updated`
+    const matchResult = await withTimeBudget(
+      computeTrailProgress(user.id, trailIds.length > 0 ? trailIds : undefined),
+      TRAIL_MATCHING_TIME_BUDGET_MS
     );
+    if (matchResult === "timed_out") {
+      console.warn(
+        `[webhook/strava] Trail matching for activity ${activityId} exceeded ${TRAIL_MATCHING_TIME_BUDGET_MS}ms — proceeding to description write with whatever's already matched; remaining trails keep processing in the background and will be picked up next time`
+      );
+    } else {
+      console.log(
+        `[webhook/strava] Trail matching complete — ${matchResult} trail(s) updated`
+      );
+    }
 
     // Optionally append trail info to the Strava activity description
     if (userPrefs?.strava_description_updates) {
