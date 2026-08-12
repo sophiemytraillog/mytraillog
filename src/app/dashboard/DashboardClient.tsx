@@ -208,7 +208,11 @@ export default function DashboardClient({
   const searchActive = search.trim().length > 0 || regionFilter !== "all";
 
   function matchesFilters(t: TrailRow) {
-    if (regionFilter !== "all" && t.region !== regionFilter) return false;
+    // Trails are stored with specific sub-regions ("South East England",
+    // "Wales & Borders", etc.), not the dropdown's four broad options — an
+    // exact match against "England" excluded every trail in the country.
+    // Substring match instead: any region containing the selected name counts.
+    if (regionFilter !== "all" && !t.region.toLowerCase().includes(regionFilter.toLowerCase())) return false;
     if (search.trim() && !t.name.toLowerCase().includes(search.trim().toLowerCase())) return false;
     return true;
   }
