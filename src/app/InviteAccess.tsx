@@ -58,7 +58,17 @@ export default function InviteAccess() {
     }
   }
 
-  const isValid = status === "valid";
+  // The button is never client-side disabled: whether a code is actually
+  // required depends on whether this is a brand-new Strava athlete, which
+  // only the server can know (via strava_id) — and only after the OAuth
+  // round-trip completes. Returning users can just click straight through;
+  // the callback route skips the invite check entirely for them. A new
+  // user with no code (or a bad one) gets sent to Strava and back with
+  // ?error=invalid_invite, shown via the banner above.
+  const trimmedCode = code.trim();
+  const stravaHref = trimmedCode
+    ? `/api/auth/strava?invite=${encodeURIComponent(trimmedCode)}`
+    : "/api/auth/strava";
 
   return (
     <div id="get-started" className="max-w-sm mx-auto scroll-mt-10">
@@ -80,30 +90,22 @@ export default function InviteAccess() {
           <p className="text-[#C4652A] text-xs mt-1.5">Invite code not recognised or already used.</p>
         )}
         {status === "valid" && <p className="text-[#4A7C59] text-xs mt-1.5">Code accepted — you&apos;re in!</p>}
+        {status === "idle" && (
+          <p className="text-[#8A7F72]/70 text-xs mt-1.5">Already connected before? Leave this blank and connect below.</p>
+        )}
       </div>
 
-      {isValid ? (
-        <a
-          href={`/api/auth/strava?invite=${encodeURIComponent(code.trim())}`}
-          className="inline-block hover:-translate-y-0.5 active:translate-y-0 transition-transform duration-200"
-        >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/strava/btn_strava_connect_with_orange.svg"
-            alt="Connect with Strava"
-            style={{ height: "48px", width: "auto" }}
-          />
-        </a>
-      ) : (
-        <span className="inline-flex opacity-40 cursor-not-allowed" aria-disabled="true">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/strava/btn_strava_connect_with_orange.svg"
-            alt="Connect with Strava (enter a valid invite code first)"
-            style={{ height: "48px", width: "auto" }}
-          />
-        </span>
-      )}
+      <a
+        href={stravaHref}
+        className="inline-block hover:-translate-y-0.5 active:translate-y-0 transition-transform duration-200"
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/strava/btn_strava_connect_with_orange.svg"
+          alt="Connect with Strava"
+          style={{ height: "48px", width: "auto" }}
+        />
+      </a>
 
       <div className="mt-6">
         {!showWaitlist ? (
