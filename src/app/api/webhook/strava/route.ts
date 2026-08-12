@@ -4,6 +4,7 @@ import { pool } from "@/lib/db";
 import {
   getValidAccessToken,
   decodePolylineToWKT,
+  selectPolyline,
   ALL_TRACKED_ACTIVITY_TYPES,
 } from "@/lib/strava";
 import { computeTrailProgress } from "@/lib/match-trails";
@@ -269,7 +270,8 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number) {
       return;
     }
 
-    const wkt = decodePolylineToWKT(activity.map?.summary_polyline);
+    const rawPolyline = selectPolyline(activity.map);
+    const wkt = decodePolylineToWKT(rawPolyline);
     const { rowCount } = await pool.query(
       `INSERT INTO activities (
          user_id, strava_activity_id, name, activity_type,
@@ -280,7 +282,7 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number) {
       [
         user.id, activity.id, activity.name, activityType,
         activity.distance, activity.moving_time, activity.start_date,
-        activity.map?.summary_polyline ?? null, wkt,
+        rawPolyline, wkt,
       ]
     );
 

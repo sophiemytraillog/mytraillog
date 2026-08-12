@@ -2,6 +2,7 @@ import { pool } from "@/lib/db";
 import {
   getValidAccessToken,
   decodePolylineToWKT,
+  selectPolyline,
   ALL_TRACKED_ACTIVITY_TYPES,
 } from "@/lib/strava";
 import { computeTrailProgress } from "@/lib/match-trails";
@@ -77,7 +78,12 @@ interface StravaActivity {
   distance: number;
   moving_time: number;
   start_date: string;
-  map?: { summary_polyline?: string | null };
+  // polyline (full-resolution) is only ever present on the detail endpoint
+  // (GET /activities/{id}), never on this list endpoint's summary
+  // representation — selectPolyline's fallback to it is a no-op here, kept
+  // only so this type and the fallback stay consistent with the other
+  // call sites that decode a Strava polyline.
+  map?: { summary_polyline?: string | null; polyline?: string | null };
 }
 
 export interface SyncProgress {
@@ -132,7 +138,7 @@ export async function runSyncChunk(
       for (const activity of activities) {
         const type = activity.sport_type || activity.type;
         if (!ALL_TRACKED_ACTIVITY_TYPES.has(type)) continue;
-        const rawPolyline = activity.map?.summary_polyline ?? null;
+        const rawPolyline = selectPolyline(activity.map);
         const wkt = decodePolylineToWKT(rawPolyline);
         // Only worth flagging when Strava gave us a polyline and decoding it
         // still failed (malformed data) — a null polyline (manual entry,

@@ -74,6 +74,21 @@ export async function getValidAccessToken(userId: string): Promise<string> {
 // ── Geometry helpers ─────────────────────────────────────────────────────────
 
 /**
+ * Strava's `map.summary_polyline` can come back empty even when the
+ * activity genuinely has a GPS track — confirmed directly against Strava's
+ * API for a short activity where summary_polyline was "" but the detailed
+ * `polyline` field (only present on GET /activities/{id}, not the
+ * /athlete/activities list endpoint) was fully populated. Falls back to the
+ * full-resolution polyline whenever the summary one is missing/empty; a
+ * no-op wherever only the list endpoint's summary is available at all.
+ */
+export function selectPolyline(
+  map?: { summary_polyline?: string | null; polyline?: string | null } | null
+): string | null {
+  return map?.summary_polyline || map?.polyline || null;
+}
+
+/**
  * Decodes a Strava summary_polyline into a WKT LineString suitable for
  * ST_GeomFromText($n, 4326).  Returns null if the input is blank or decodes
  * to fewer than 2 points.

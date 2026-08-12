@@ -35,6 +35,15 @@ const SYNC_ACTIVITY_TYPES = new Set(["Run", "TrailRun", "Walk", "Hike"]);
 const CYCLING_ACTIVITY_TYPES = new Set(["Ride", "MountainBikeRide", "GravelRide", "EBikeRide"]);
 const ALL_TRACKED_ACTIVITY_TYPES = new Set([...SYNC_ACTIVITY_TYPES, ...CYCLING_ACTIVITY_TYPES]);
 
+// Strava's map.summary_polyline can come back empty even when a real GPS
+// track exists — see src/lib/strava.ts's selectPolyline for the confirmed
+// case. This list endpoint never includes the full-resolution `polyline`
+// field either way, so the fallback is a no-op here, kept only for
+// consistency with the other places a Strava polyline gets decoded.
+function selectPolyline(map) {
+  return (map && (map.summary_polyline || map.polyline)) || null;
+}
+
 function decodePolylineToWKT(encoded) {
   if (!encoded) return null;
   // Standard Google polyline algorithm (matches @mapbox/polyline decode)
@@ -106,7 +115,8 @@ async function runFullSync(userId) {
     for (const activity of activities) {
       const type = activity.sport_type || activity.type;
       if (!ALL_TRACKED_ACTIVITY_TYPES.has(type)) continue;
-      const wkt = decodePolylineToWKT(activity.map?.summary_polyline);
+      const rawPolyline = selectPolyline(activity.map);
+      const wkt = decodePolylineToWKT(rawPolyline);
       const result = await pool.query(
         `INSERT INTO activities (
            user_id, strava_activity_id, name, activity_type,
@@ -116,7 +126,7 @@ async function runFullSync(userId) {
          ON CONFLICT (strava_activity_id) DO NOTHING
          RETURNING id`,
         [userId, activity.id, activity.name, type, activity.distance,
-         activity.moving_time, activity.start_date, activity.map?.summary_polyline ?? null, wkt]
+         activity.moving_time, activity.start_date, rawPolyline, wkt]
       );
       if ((result.rowCount ?? 0) > 0) { pageNew++; newDbIds.push(result.rows[0].id); }
     }
