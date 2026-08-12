@@ -43,6 +43,7 @@ export default async function Dashboard({
 
   let stats: UserStats | null = null;
   let stravaDescriptionUpdates = false;
+  let descriptionMode: "full" | "new_only" | "new_with_totals" = "full";
   let stravaScope: string | null = null;
   let includeCycling = false;
   let staleSync = false;
@@ -51,6 +52,7 @@ export default async function Dashboard({
       const result = await query<
         UserStats & {
           strava_description_updates: boolean;
+          description_mode: "full" | "new_only" | "new_with_totals";
           strava_scope: string | null;
           include_cycling: boolean;
           stale_sync: boolean;
@@ -59,6 +61,7 @@ export default async function Dashboard({
         `SELECT u.last_synced_at,
                 u.sync_status,
                 u.strava_description_updates,
+                u.description_mode,
                 u.strava_scope,
                 u.include_cycling,
                 (u.sync_status = 'syncing'
@@ -69,11 +72,12 @@ export default async function Dashboard({
          LEFT JOIN activities a ON a.user_id = u.id
          WHERE u.id = $1
          GROUP BY u.last_synced_at, u.sync_status, u.strava_description_updates,
-                  u.strava_scope, u.include_cycling, u.sync_progress_at`,
+                  u.description_mode, u.strava_scope, u.include_cycling, u.sync_progress_at`,
         [userId]
       );
       stats = result.rows[0] ?? null;
       stravaDescriptionUpdates = result.rows[0]?.strava_description_updates ?? false;
+      descriptionMode = result.rows[0]?.description_mode ?? "full";
       stravaScope = result.rows[0]?.strava_scope ?? null;
       includeCycling = result.rows[0]?.include_cycling ?? false;
       staleSync = result.rows[0]?.stale_sync ?? false;
@@ -145,6 +149,7 @@ export default async function Dashboard({
       activityCount={activityCount}
       autoSync={autoSync}
       stravaDescriptionUpdates={stravaDescriptionUpdates}
+      descriptionMode={descriptionMode}
       hasWriteScope={stravaScope?.includes("activity:write") ?? false}
       includeCycling={includeCycling}
     />

@@ -6,6 +6,7 @@ import {
   writeTrailDescription,
   ScopeError,
   StravaRateLimitError,
+  type DescriptionMode,
 } from "@/lib/trail-descriptions";
 
 export const dynamic = "force-dynamic";
@@ -118,6 +119,12 @@ export async function GET(request: NextRequest) {
       try {
         const startedAt = Date.now();
 
+        const { rows: [userPrefs] } = await pool.query<{ description_mode: DescriptionMode }>(
+          "SELECT description_mode FROM users WHERE id = $1",
+          [userId]
+        );
+        const mode: DescriptionMode = userPrefs?.description_mode ?? "full";
+
         // Candidate activities come straight from the activity_trail_matches
         // cache (populated by computeTrailProgress — see match-trails.ts) instead
         // of re-running spatial queries against every matched trail on every
@@ -194,14 +201,21 @@ export async function GET(request: NextRequest) {
 
             try {
               const matches = await getActivityTrailMatches(userId, act.id);
+              // new_trail_distance_m is derived from this activity's own
+              // (permanent) start_date, so this result can never change
+              // later — safe to pre-filter here and skip the Strava-calling
+              // path (and its backfill-budget cost) entirely for anything
+              // new_only/new_with_totals would end up writing nothing for.
+              const relevantMatches = mode === "full" ? matches : matches.filter((m) => m.new_trail_distance_m > 0);
 
-              if (matches.length === 0) {
+              if (relevantMatches.length === 0) {
                 console.log(`[update-descriptions] Skipping ${i + 1}/${total} — no trail match: ${act.name}`);
                 // activity_trail_matches is a coarse candidate list (simplified
-                // trail geometry) — this activity was a false positive there.
-                // Mark it checked anyway so it doesn't keep reappearing at the
-                // front of the queue on every future run, blocking progress on
-                // the rest of the backlog.
+                // trail geometry) — this activity was either a false positive
+                // there, or (new_only/new_with_totals) matched but covered no
+                // new ground. Mark it checked anyway so it doesn't keep
+                // reappearing at the front of the queue on every future run,
+                // blocking progress on the rest of the backlog.
                 await pool.query(
                   "UPDATE activities SET strava_description_updated = TRUE WHERE id = $1",
                   [act.id]
@@ -229,6 +243,7 @@ export async function GET(request: NextRequest) {
                 act.id,
                 parseInt(act.strava_activity_id),
                 matches,
+                mode,
                 0,
                 limiter
               );
@@ -239,7 +254,7 @@ export async function GET(request: NextRequest) {
                   current: i + 1,
                   total,
                   updated,
-                  message: `Updated: ${act.name} (${matches.length} trail${matches.length !== 1 ? "s" : ""})`,
+                  message: `Updated: ${act.name} (${relevantMatches.length} trail${relevantMatches.length !== 1 ? "s" : ""})`,
                 });
               }
             } catch (err) {

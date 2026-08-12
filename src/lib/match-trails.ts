@@ -94,6 +94,29 @@ const ACTIVITY_MATCH_SQL = `
     AND ST_DWithin(a.geometry::geography, t_simplified.geometry::geography, ${BUFFER_METRES + SIMPLIFY_MARGIN})
   ON CONFLICT (activity_id, trail_id) DO NOTHING`;
 
+/**
+ * Cheap indexed lookup of user_trail_progress.completed_distance for a set
+ * of trails — no geometry involved. Callers take one snapshot right before
+ * computeTrailProgress and another right after; the delta is exactly "how
+ * much new ground got added by whatever activities computeTrailProgress
+ * just merged in", which trail-descriptions.ts's getActivityTrailMatches
+ * uses as an exact new_trail_distance_m instead of recomputing it via a
+ * separate (and, confirmed in production, far too expensive) geometric
+ * union — see the comment there for what that cost.
+ */
+export async function snapshotTrailProgress(
+  userId: string,
+  trailIds: string[]
+): Promise<Map<string, number>> {
+  if (trailIds.length === 0) return new Map();
+  const { rows } = await pool.query<{ trail_id: string; completed_distance: number }>(
+    `SELECT trail_id, completed_distance FROM user_trail_progress
+     WHERE user_id = $1 AND trail_id = ANY($2::uuid[])`,
+    [userId, trailIds]
+  );
+  return new Map(rows.map((r) => [r.trail_id, r.completed_distance]));
+}
+
 export async function computeTrailProgress(userId: string, trailIds?: string[]): Promise<number> {
   const { rows: [userPrefs] } = await pool.query<{ include_cycling: boolean }>(
     "SELECT include_cycling FROM users WHERE id = $1",

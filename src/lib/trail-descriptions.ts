@@ -38,12 +38,19 @@ async function fetchStrava(url: string, options: RequestInit): Promise<Response>
 
 const BUFFER_METRES = 50;
 
-export interface TrailMatch {
+export type DescriptionMode = "full" | "new_only" | "new_with_totals";
+
+interface TrailMatchRow {
+  trail_id: string;
   name: string;
   completed_distance: number;
   completion_percentage: number;
   total_distance: number;
   activity_trail_distance_m: number;
+}
+
+export interface TrailMatch extends TrailMatchRow {
+  new_trail_distance_m: number;
 }
 
 /**
@@ -57,13 +64,34 @@ export interface TrailMatch {
  * intentionally stores GPS-only progress (computeTrailProgress never touches
  * manual segments), so any consumer that skips this combination under-reports
  * completion for trails with a manual fill.
+ *
+ * new_trail_distance_m ("how much of the trail did THIS activity add that
+ * nothing earlier had") is NOT computed here via geometry — an earlier
+ * version tried ST_Union-ing every one of a user's prior activities near a
+ * trail per matched-activity call, and confirmed directly against
+ * production (Sophie's account, Greenwich Meridian Trail) that it can run
+ * for minutes and starve the connection pool. computeTrailProgress already
+ * does that expensive union once, as part of normal matching, so we reuse
+ * ITS output instead of redoing it: newGroundByTrailId is a
+ * before/after-snapshot of user_trail_progress.completed_distance built by
+ * the caller around its (already-happening) computeTrailProgress call — see
+ * snapshotTrailProgress in match-trails.ts. Falls back to this activity's
+ * own raw trail overlap (activity_trail_distance_m, cheap — a single
+ * intersection, no cross-activity union) when no snapshot is available,
+ * which is the case for the historical backfill catch-up
+ * (update-descriptions route) processing activities matched long before
+ * this feature existed — an approximation (assumes the whole activity is
+ * new ground, overcounting on a repeated route) rather than the real thing,
+ * but bounded and cheap, unlike the geometric approach.
  */
 export async function getActivityTrailMatches(
   userId: string,
-  activityDbId: string
+  activityDbId: string,
+  newGroundByTrailId?: Map<string, number>
 ): Promise<TrailMatch[]> {
-  const { rows } = await pool.query<TrailMatch>(
-    `SELECT t.name,
+  const { rows } = await pool.query<TrailMatchRow>(
+    `SELECT t.id AS trail_id,
+            t.name,
             LEAST(
               utp.completed_distance + COALESCE(ms.manual_m, 0),
               t.total_distance
@@ -101,7 +129,10 @@ export async function getActivityTrailMatches(
      ORDER BY completion_percentage DESC`,
     [activityDbId, userId, BUFFER_METRES]
   );
-  return rows;
+  return rows.map((r) => ({
+    ...r,
+    new_trail_distance_m: newGroundByTrailId?.get(r.trail_id) ?? r.activity_trail_distance_m,
+  }));
 }
 
 function getAppUrl(): string {
@@ -130,14 +161,31 @@ async function resolveDistanceUnit(userId: string): Promise<DistanceUnit> {
 // No leading/trailing blank lines here — separation from any existing
 // description text is the caller's job (writeTrailDescription), since only
 // it knows whether there's anything to separate from.
-function buildTrailBlock(matches: TrailMatch[], unit: DistanceUnit): string {
+//
+// Callers are expected to have already filtered `matches` down to whatever
+// this mode should actually report (see writeTrailDescription) — "full"
+// still shows every matched trail (with or without new ground), while
+// "new_only"/"new_with_totals" are only ever called with trails that did
+// have new ground, so their branches don't need a no-new-ground fallback.
+function buildTrailBlock(matches: TrailMatch[], unit: DistanceUnit, mode: DescriptionMode): string {
   const label = unitLabel(unit);
   const lines = matches.map((m) => {
-    const actDist = formatDist(m.activity_trail_distance_m, unit);
+    const newDist = formatDist(m.new_trail_distance_m, unit);
     const completedDist = formatDist(m.completed_distance, unit);
     const totalDist = formatDist(m.total_distance, unit);
     const pct = Math.round(m.completion_percentage);
-    return `🥾 ${m.name}: ${actDist}${label} (${pct}% total · ${completedDist}/${totalDist}${label})`;
+    const totals = `${pct}% total · ${completedDist}/${totalDist}${label}`;
+
+    if (mode === "new_only") {
+      return `🥾 ${m.name}: +${newDist}${label} new trail`;
+    }
+    if (mode === "new_with_totals") {
+      return `🥾 ${m.name}: +${newDist}${label} new trail (${totals})`;
+    }
+    // mode === "full"
+    return m.new_trail_distance_m > 0
+      ? `🥾 ${m.name}: +${newDist}${label} new trail (${totals})`
+      : `🥾 ${m.name}: ${totals}`;
   });
   return `${lines.join("\n")}\n${getAppUrl()}`;
 }
@@ -149,6 +197,9 @@ function buildTrailBlock(matches: TrailMatch[], unit: DistanceUnit): string {
  * @param activityDbId    Our DB activity UUID
  * @param stravaActivityId Strava's numeric activity ID
  * @param matches         Pre-fetched trail matches (call getActivityTrailMatches first)
+ * @param mode            'full' writes every matched trail; 'new_only'/'new_with_totals'
+ *                        only write trails with new_trail_distance_m > 0 — with none,
+ *                        this returns false before making any Strava API calls at all.
  * @param delayMs         Optional delay before making Strava API calls
  * @returns true if the description was updated, false if no changes were needed
  */
@@ -157,10 +208,13 @@ export async function writeTrailDescription(
   activityDbId: string,
   stravaActivityId: number,
   matches: TrailMatch[],
+  mode: DescriptionMode = "full",
   delayMs = 0,
   rateLimiter?: { waitForSlot(): Promise<void> }
 ): Promise<boolean> {
-  if (matches.length === 0) return false;
+  const relevantMatches =
+    mode === "full" ? matches : matches.filter((m) => m.new_trail_distance_m > 0);
+  if (relevantMatches.length === 0) return false;
 
   if (delayMs > 0) {
     await new Promise<void>((r) => setTimeout(r, delayMs));
@@ -193,17 +247,24 @@ export async function writeTrailDescription(
   // runs, leaving it permanently orphaned mid-description while a fresh
   // block keeps getting appended after the other app's text. Matching
   // globally finds every occurrence regardless of position. Handles the
-  // legacy "🥾 My Trail Log" header format, the current per-trail-line
-  // format (either km or mi), and tolerates the odd "mytraillog . com"
-  // spacing/trailing characters seen in older writes. Any blank-line gaps
-  // left behind by removed blocks get collapsed before re-appending one
-  // fresh block.
+  // legacy "🥾 My Trail Log" header format, the legacy per-trail-line
+  // format ("Name: D.Dkm (P% total · C/Tkm)"), all three current
+  // description_mode formats ("Name: P% total · C/Tkm", "Name: +D.Dkm new
+  // trail", "Name: +D.Dkm new trail (P% total · C/Tkm)", either km or mi),
+  // and tolerates the odd "mytraillog . com" spacing/trailing characters
+  // seen in older writes. A description written under one mode is found and
+  // replaced the same way even after the user switches modes. Any
+  // blank-line gaps left behind by removed blocks get collapsed before
+  // re-appending one fresh block.
   const baseDesc = currentDesc
     .replace(/🥾 My Trail Log[\s\S]*?(?=\r?\n\r?\n|$)/g, "")
-    .replace(/(?:[^\n]+:\s*\d+\.\d+\s*(?:km|mi)\s*\([^\n]*\)\n)+mytraillog\s*\.?\s*com[^\n]*\n?/gi, "")
+    .replace(
+      /(?:[^\n]+:\s*(?:\+?\d+(?:\.\d+)?\s*(?:km|mi)(?:\s*new trail)?(?:\s*\([^\n]*\))?|\d+%\s*total\s*·\s*\d+(?:\.\d+)?\/\d+(?:\.\d+)?\s*(?:km|mi))\n)+mytraillog\s*\.?\s*com[^\n]*\n?/gi,
+      ""
+    )
     .replace(/[ \t]*(?:\r?\n){2,}/g, "\n\n")
     .trim();
-  const trailBlock = buildTrailBlock(matches, unit);
+  const trailBlock = buildTrailBlock(relevantMatches, unit, mode);
   // Exactly one blank line of separation when there's existing text to
   // separate from; no leading blank lines at all when there isn't.
   const newDesc = baseDesc ? `${baseDesc}\n\n${trailBlock}` : trailBlock;
@@ -237,7 +298,7 @@ export async function writeTrailDescription(
     [activityDbId]
   );
   console.log(
-    `[descriptions] Updated activity ${stravaActivityId}: ${matches.length} trail(s) — activityDbId ${activityDbId}`
+    `[descriptions] Updated activity ${stravaActivityId}: ${relevantMatches.length} trail(s) (mode: ${mode}) — activityDbId ${activityDbId}`
   );
   return true;
 }

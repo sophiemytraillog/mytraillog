@@ -5,12 +5,13 @@ import {
   selectPolyline,
   ALL_TRACKED_ACTIVITY_TYPES,
 } from "@/lib/strava";
-import { computeTrailProgress } from "@/lib/match-trails";
+import { computeTrailProgress, snapshotTrailProgress } from "@/lib/match-trails";
 import {
   getActivityTrailMatches,
   writeTrailDescription,
   ScopeError,
   StravaRateLimitError,
+  type DescriptionMode,
 } from "@/lib/trail-descriptions";
 import { logSyncEvent } from "@/lib/sync-log";
 
@@ -283,6 +284,28 @@ export async function finishSync(
 
   if (newDbIds.length === 0) return { matchedTrails, descUpdated };
 
+  const { rows: [userPrefs] } = await pool.query<{
+    strava_description_updates: boolean;
+    description_mode: DescriptionMode;
+  }>(
+    "SELECT strava_description_updates, description_mode FROM users WHERE id = $1",
+    [userId]
+  );
+  const wantsDescriptionUpdate = userPrefs?.strava_description_updates ?? false;
+
+  // Delta of user_trail_progress.completed_distance across this batch's
+  // computeTrailProgress call, per trail — see snapshotTrailProgress's
+  // comment for why this reuses that computation instead of a separate
+  // (and, confirmed in production, far too expensive) geometric recompute.
+  // One map shared across every activity in this batch: if two brand-new
+  // activities in the same sync chunk both touch the same trail, this
+  // can't tell which one contributed which share of the combined delta,
+  // so both end up reporting the batch's whole new-ground total for that
+  // trail rather than a precise per-activity split. Rare in practice (most
+  // syncs/webhook events involve one activity at a time) and not worth the
+  // complexity of per-activity re-matching to fix.
+  let newGroundByTrailId = new Map<string, number>();
+
   try {
     const { rows: nearbyTrails } = await pool.query<{ id: string }>(
       `SELECT DISTINCT t.id
@@ -299,8 +322,17 @@ export async function finishSync(
       processing: trailIds.length,
       deferred: allTrailIds.length - trailIds.length,
     });
+    const beforeSnapshot = wantsDescriptionUpdate
+      ? await snapshotTrailProgress(userId, trailIds)
+      : new Map<string, number>();
     if (trailIds.length > 0) {
       matchedTrails = await computeTrailProgress(userId, trailIds);
+    }
+    if (wantsDescriptionUpdate) {
+      const afterSnapshot = await snapshotTrailProgress(userId, trailIds);
+      newGroundByTrailId = new Map(
+        trailIds.map((id) => [id, Math.max(0, (afterSnapshot.get(id) ?? 0) - (beforeSnapshot.get(id) ?? 0))])
+      );
     }
     logSyncEvent(userId, "matching_complete", { matchedTrails });
 
@@ -323,11 +355,8 @@ export async function finishSync(
     });
   }
 
-  const { rows: [userPrefs] } = await pool.query<{ strava_description_updates: boolean }>(
-    "SELECT strava_description_updates FROM users WHERE id = $1",
-    [userId]
-  );
-  if (userPrefs?.strava_description_updates) {
+  if (wantsDescriptionUpdate) {
+    const mode: DescriptionMode = userPrefs.description_mode ?? "full";
     const { rows: toUpdate } = await pool.query<{ id: string; strava_activity_id: string }>(
       `SELECT id, strava_activity_id::text
        FROM activities
@@ -338,13 +367,17 @@ export async function finishSync(
     );
     for (const act of toUpdate) {
       try {
-        const matches = await getActivityTrailMatches(userId, act.id);
-        if (matches.length > 0) {
-          const updated = await writeTrailDescription(userId, act.id, parseInt(act.strava_activity_id), matches);
+        const matches = await getActivityTrailMatches(userId, act.id, newGroundByTrailId);
+        // new_trail_distance_m is derived from this activity's own (permanent)
+        // start_date relative to the user's other activities, so this result
+        // can never change later — safe to mark checked whenever there's
+        // nothing to write, whether that's no trail overlap at all or (in
+        // new_only/new_with_totals) no new ground on any matched trail.
+        const relevantMatches = mode === "full" ? matches : matches.filter((m) => m.new_trail_distance_m > 0);
+        if (relevantMatches.length > 0) {
+          const updated = await writeTrailDescription(userId, act.id, parseInt(act.strava_activity_id), matches, mode);
           if (updated) descUpdated++;
         } else {
-          // Confirmed no trail overlap — mark checked so update-descriptions'
-          // backlog scan doesn't reprocess it later.
           await pool.query("UPDATE activities SET strava_description_updated = TRUE WHERE id = $1", [act.id]).catch(() => {});
         }
       } catch (err) {

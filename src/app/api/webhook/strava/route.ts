@@ -7,11 +7,12 @@ import {
   selectPolyline,
   ALL_TRACKED_ACTIVITY_TYPES,
 } from "@/lib/strava";
-import { computeTrailProgress } from "@/lib/match-trails";
+import { computeTrailProgress, snapshotTrailProgress } from "@/lib/match-trails";
 import {
   getActivityTrailMatches,
   writeTrailDescription,
   ScopeError,
+  type DescriptionMode,
 } from "@/lib/trail-descriptions";
 
 // A single trail's match computation can legitimately take well over a
@@ -258,8 +259,11 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number) {
 
     const activityType: string = activity.sport_type || activity.type;
 
-    const { rows: [userPrefs] } = await pool.query<{ strava_description_updates: boolean }>(
-      "SELECT strava_description_updates FROM users WHERE id = $1",
+    const { rows: [userPrefs] } = await pool.query<{
+      strava_description_updates: boolean;
+      description_mode: DescriptionMode;
+    }>(
+      "SELECT strava_description_updates, description_mode FROM users WHERE id = $1",
       [user.id]
     );
 
@@ -311,6 +315,19 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number) {
     );
     const trailIds = nearbyTrails.map(r => r.id);
 
+    // Snapshot completed_distance before/after matching so writeTrailDescription
+    // can report exactly how much new ground THIS activity added — see the
+    // comment on snapshotTrailProgress. Only meaningful for the nearby-trails
+    // fast path (trailIds non-empty); the rare full-account fallback below
+    // isn't scoped to specific trails, so there's nothing to diff for it and
+    // getActivityTrailMatches just falls back to its own cheap approximation.
+    // Skipped entirely when the user doesn't have description writes on —
+    // no point taking two extra snapshots nothing will ever read.
+    const wantsDescriptionUpdate = userPrefs?.strava_description_updates ?? false;
+    const beforeSnapshot = wantsDescriptionUpdate
+      ? await snapshotTrailProgress(user.id, trailIds)
+      : new Map<string, number>();
+
     console.log(
       `[webhook/strava] Saved activity ${activityId}, matching ${trailIds.length} nearby trail(s)…`
     );
@@ -329,13 +346,19 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number) {
     }
 
     // Optionally append trail info to the Strava activity description
-    if (userPrefs?.strava_description_updates) {
-      const matches = await getActivityTrailMatches(user.id, savedAct.id);
+    if (wantsDescriptionUpdate) {
+      const afterSnapshot = await snapshotTrailProgress(user.id, trailIds);
+      const newGroundByTrailId = new Map(
+        trailIds.map((id) => [id, Math.max(0, (afterSnapshot.get(id) ?? 0) - (beforeSnapshot.get(id) ?? 0))])
+      );
+      const matches = await getActivityTrailMatches(user.id, savedAct.id, newGroundByTrailId);
       if (matches.length > 0) {
         console.log(
           `[webhook/strava] Updating description for activity ${activityId}…`
         );
-        await writeTrailDescription(user.id, savedAct.id, activityId, matches)
+        await writeTrailDescription(
+          user.id, savedAct.id, activityId, matches, userPrefs.description_mode ?? "full"
+        )
           .catch((err) => {
             if (err instanceof ScopeError) {
               console.warn(`[webhook/strava] Scope error — user needs to reconnect: ${err.message}`);

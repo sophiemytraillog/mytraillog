@@ -158,6 +158,24 @@ $$;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS strava_scope               TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS strava_description_updates BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS include_cycling            BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Controls how much detail writeTrailDescription puts in the Strava
+-- activity description when strava_description_updates is on — see
+-- src/lib/trail-descriptions.ts. 'full' (default) writes every matched
+-- trail every time; 'new_only'/'new_with_totals' only write when an
+-- activity covers genuinely new ground.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS description_mode TEXT NOT NULL DEFAULT 'full';
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'users_description_mode_check'
+  ) THEN
+    ALTER TABLE users ADD CONSTRAINT users_description_mode_check
+      CHECK (description_mode IN ('full', 'new_only', 'new_with_totals'));
+  END IF;
+END
+$$;
 ALTER TABLE activities ADD COLUMN IF NOT EXISTS strava_description_updated BOOLEAN NOT NULL DEFAULT FALSE;
 -- Heartbeat updated on every page fetched during a sync chunk (see
 -- src/lib/sync-engine.ts). Lets the dashboard self-heal check and the cron

@@ -49,6 +49,8 @@ interface UserStats {
   activity_count: string;
 }
 
+type DescriptionMode = "full" | "new_only" | "new_with_totals";
+
 interface Props {
   athlete: Athlete;
   stats: UserStats | null;
@@ -56,6 +58,7 @@ interface Props {
   activityCount: number;
   autoSync: boolean;
   stravaDescriptionUpdates: boolean;
+  descriptionMode: DescriptionMode;
   hasWriteScope: boolean;
   includeCycling: boolean;
 }
@@ -91,7 +94,7 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
 }
 
 export default function DashboardClient({
-  athlete, stats, trails, activityCount, autoSync, stravaDescriptionUpdates, hasWriteScope, includeCycling,
+  athlete, stats, trails, activityCount, autoSync, stravaDescriptionUpdates, descriptionMode, hasWriteScope, includeCycling,
 }: Props) {
   const { unit, setUnit } = useDistanceUnit();
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
@@ -101,6 +104,8 @@ export default function DashboardClient({
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(stats?.last_synced_at ?? null);
   const [descUpdates, setDescUpdates] = useState(stravaDescriptionUpdates);
   const [savingPref, setSavingPref] = useState(false);
+  const [descMode, setDescMode] = useState<DescriptionMode>(descriptionMode);
+  const [savingMode, setSavingMode] = useState(false);
   const [cyclingEnabled, setCyclingEnabled] = useState(includeCycling);
   const [savingCycling, setSavingCycling] = useState(false);
   const [backfillStatus, setBackfillStatus] = useState<string | null>(null);
@@ -118,6 +123,20 @@ export default function DashboardClient({
       });
     } finally {
       setSavingPref(false);
+    }
+  }
+
+  async function changeDescriptionMode(mode: DescriptionMode) {
+    setSavingMode(true);
+    setDescMode(mode);
+    try {
+      await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description_mode: mode }),
+      });
+    } finally {
+      setSavingMode(false);
     }
   }
 
@@ -329,6 +348,26 @@ export default function DashboardClient({
                     )}
                   </div>
                 </label>
+
+                {descUpdates && (
+                  <div className="mt-2 pl-[calc(2rem+0.625rem)]">
+                    <select
+                      value={descMode}
+                      disabled={savingMode}
+                      onChange={(e) => changeDescriptionMode(e.target.value as DescriptionMode)}
+                      className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-[#E5DED4] bg-white text-[#2C2520] focus:outline-none focus:ring-2 focus:ring-[#C4652A]/40 disabled:opacity-50"
+                    >
+                      <option value="full">Full detail</option>
+                      <option value="new_only">New trail only</option>
+                      <option value="new_with_totals">New trail + totals</option>
+                    </select>
+                    <p className="text-[#8A7F72]/60 text-[10px] mt-1 leading-relaxed">
+                      {descMode === "full" && "Writes trail progress on every matched activity, even with no new ground."}
+                      {descMode === "new_only" && "Only writes when an activity covers new trail ground — just the new distance."}
+                      {descMode === "new_with_totals" && "Only writes when an activity covers new trail ground, with totals included."}
+                    </p>
+                  </div>
+                )}
 
                 <UpdateDescriptionsButton />
               </div>

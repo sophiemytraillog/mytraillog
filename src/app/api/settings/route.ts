@@ -7,7 +7,7 @@ export async function PATCH(request: NextRequest) {
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await request.json();
-  const { strava_description_updates, include_cycling, distance_unit } = body;
+  const { strava_description_updates, description_mode, include_cycling, distance_unit } = body;
 
   if (strava_description_updates !== undefined) {
     if (typeof strava_description_updates !== "boolean") {
@@ -16,6 +16,16 @@ export async function PATCH(request: NextRequest) {
     await query(
       "UPDATE users SET strava_description_updates = $1 WHERE id = $2",
       [strava_description_updates, userId]
+    );
+  }
+
+  if (description_mode !== undefined) {
+    if (!["full", "new_only", "new_with_totals"].includes(description_mode)) {
+      return NextResponse.json({ error: "Invalid value" }, { status: 400 });
+    }
+    await query(
+      "UPDATE users SET description_mode = $1 WHERE id = $2",
+      [description_mode, userId]
     );
   }
 
