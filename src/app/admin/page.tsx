@@ -135,16 +135,35 @@ export default async function AdminPage() {
   const waitlistResult = await query<WaitlistRow>(
     `SELECT email, signed_up_at FROM waitlist ORDER BY signed_up_at DESC`
   );
+  // Two separate LEFT JOINs straight to users (one to activities, one to
+  // user_trail_progress) multiply against each other before GROUP BY
+  // collapses them — for a user with 4,017 activities and 170 matched
+  // trails that's 683,000+ intermediate rows just for one account, ~1.9M
+  // across all users, each one evaluating a.geometry (PostGIS data). That
+  // blew Postgres's work_mem and spilled a temp file large enough to hit
+  // "No space left on device" (error 53100) in production — not a real
+  // disk-capacity issue (the whole DB is 151MB), just this query's fan-out.
+  // Pre-aggregating each table separately first means each join side is
+  // already one row per user, so there's nothing left to multiply.
   const usersResult = await query<UserRow>(
     `SELECT u.id, u.first_name, u.last_name, u.created_at, u.sync_status,
             (u.sync_status = 'syncing' AND u.sync_progress_at < NOW() - INTERVAL '3 minutes') AS stale_sync,
-            COUNT(DISTINCT a.id)::text AS activity_count,
-            COUNT(DISTINCT a.id) FILTER (WHERE a.geometry IS NOT NULL)::text AS geometry_count,
-            COUNT(DISTINCT utp.trail_id)::text AS trail_match_count
+            COALESCE(ac.activity_count, 0)::text AS activity_count,
+            COALESCE(ac.geometry_count, 0)::text AS geometry_count,
+            COALESCE(tc.trail_match_count, 0)::text AS trail_match_count
      FROM users u
-     LEFT JOIN activities a ON a.user_id = u.id
-     LEFT JOIN user_trail_progress utp ON utp.user_id = u.id
-     GROUP BY u.id, u.first_name, u.last_name, u.created_at, u.sync_status, u.sync_progress_at
+     LEFT JOIN (
+       SELECT user_id,
+              COUNT(*) AS activity_count,
+              COUNT(*) FILTER (WHERE geometry IS NOT NULL) AS geometry_count
+       FROM activities
+       GROUP BY user_id
+     ) ac ON ac.user_id = u.id
+     LEFT JOIN (
+       SELECT user_id, COUNT(DISTINCT trail_id) AS trail_match_count
+       FROM user_trail_progress
+       GROUP BY user_id
+     ) tc ON tc.user_id = u.id
      ORDER BY u.created_at DESC`
   );
 
