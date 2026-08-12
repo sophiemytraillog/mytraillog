@@ -74,10 +74,20 @@ export default function SyncButton({
       const final = combined(d);
       baseRef.current = { fetched: final.fetched, saved: final.saved };
       doneMessageRef.current = d.message;
-      setData({ ...final, message: `${d.message} — updating trail progress…` });
-      es.close();
-      // Wait for "matched" before refreshing — matching runs server-side
-      // after "done" is sent, so refreshing now would read stale stats.
+      // d.saved === 0 means the server already skipped matching entirely
+      // (nothing new to match) and sends "matched" immediately after this,
+      // so d.message ("Sync complete — already up to date") is already the
+      // final text — no interim "updating trail progress…" to show.
+      const interim = d.saved > 0 ? `${d.message} — updating trail progress…` : d.message;
+      setData({ ...final, message: interim });
+      // Deliberately NOT closing the EventSource here — matching runs
+      // server-side after "done" is sent, and closing now would sever the
+      // connection before the "matched" event the server sends afterward
+      // ever arrives, leaving the UI stuck on the interim message forever
+      // (confirmed: this was the actual cause of syncs appearing to hang
+      // on "updating trail progress…", not anything slow server-side — see
+      // the comment in sync/activities/route.ts). The "matched" and
+      // "error" handlers below close it once there's nothing left to wait for.
     });
 
     es.addEventListener("matched", () => {

@@ -80,8 +80,36 @@ export async function GET(request: NextRequest) {
           return;
         }
 
-        // status === "complete" — matching/description-writing runs after the
-        // client has been notified, so it won't block the "done" UI update.
+        // status === "complete" with nothing new saved — there is nothing
+        // for trail matching to do (finishSync itself would no-op on an
+        // empty newDbIds anyway), so skip it and the whole-account
+        // verification query entirely rather than pay for work with no
+        // possible effect.
+        //
+        // Root cause of the "hangs on updating trail progress" reports
+        // (Sophie, then Glen): SyncButton's "done" handler was closing the
+        // EventSource immediately on receipt, before the "matched" event
+        // this route sends afterward — server-side matching was never
+        // actually slow, "matched" just silently never arrived, since
+        // send()'s own try/catch swallows a write to an already-closed
+        // connection as a normal disconnect. Fixed on the client too (it
+        // now waits for "matched"/"error" to close), but sending "done"
+        // and "matched" here as one synchronous pair — no `await` between
+        // them — is extra insurance for this specific path: nothing yields
+        // back to the event loop in between, so there's no window for a
+        // client-side close to land before the server's already sent both.
+        if (result.saved === 0) {
+          send("done", {
+            fetched: result.fetched,
+            saved: result.saved,
+            message: "Sync complete — already up to date",
+          });
+          send("matched", { matchedTrails: 0, message: "Sync complete — already up to date" });
+          return;
+        }
+
+        // matching/description-writing runs after the client has been
+        // notified, so it won't block the "done" UI update.
         send("done", {
           fetched: result.fetched,
           saved: result.saved,
