@@ -1,3 +1,5 @@
+import InviteAccess from "./InviteAccess";
+
 const steps = [
   {
     number: "01",
@@ -91,15 +93,13 @@ function LogoIcon({ className }: { className?: string }) {
   );
 }
 
-function StravaButton() {
+function GetStartedLink() {
   return (
-    <a href="/api/auth/strava" className="inline-block hover:-translate-y-0.5 active:translate-y-0 transition-transform duration-200">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src="/strava/btn_strava_connect_with_orange.svg"
-        alt="Connect with Strava"
-        style={{ height: "48px", width: "auto" }}
-      />
+    <a
+      href="#get-started"
+      className="inline-block px-8 py-3.5 rounded-xl bg-[#C4652A] text-white font-semibold hover:bg-[#C4652A]/90 hover:-translate-y-0.5 active:translate-y-0 transition-all duration-200"
+    >
+      Enter your invite code
     </a>
   );
 }
@@ -109,6 +109,7 @@ const OAUTH_ERROR_MESSAGES: Record<string, string> = {
   invalid_state: "Your session expired before Strava could connect — please try again.",
   no_code: "Strava didn't send back the expected authorisation — please try again.",
   token_exchange_failed: "We couldn't complete the connection with Strava — please try again.",
+  invalid_invite: "That invite code isn't valid or has already been used.",
 };
 
 function ConnectErrorBanner({ error }: { error?: string }) {
@@ -186,7 +187,7 @@ export default function Home({
             you&apos;ve already walked, run, or cycled — from the Pennine Way to the South Downs.
           </p>
 
-          <StravaButton />
+          <InviteAccess />
 
           <p className="text-[#8A7F72]/50 text-xs mt-5 tracking-wide">
             Free to use &nbsp;·&nbsp; Read-only access to your activities
@@ -289,7 +290,7 @@ export default function Home({
           <p className="text-[#FAF8F5]/60 mb-9 text-lg leading-relaxed">
             Your Strava activities are already out there. Let&apos;s see which trails you&apos;ve conquered.
           </p>
-          <StravaButton />
+          <GetStartedLink />
         </div>
       </section>
 

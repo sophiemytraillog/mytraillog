@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { query } from "@/lib/db";
+import { query, pool } from "@/lib/db";
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -72,45 +72,101 @@ export async function GET(request: NextRequest) {
     console.warn("[strava/callback] Detailed athlete fetch errored:", err);
   }
 
-  // Upsert user into the database — tokens live here, not in cookies
+  const upsertUserSql = `INSERT INTO users (
+      strava_id, username, first_name, last_name, profile_image_url,
+      strava_access_token, strava_refresh_token, strava_token_expires_at,
+      strava_scope, measurement_preference
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8), $9, $10)
+    ON CONFLICT (strava_id) DO UPDATE SET
+      username                = EXCLUDED.username,
+      first_name              = EXCLUDED.first_name,
+      last_name               = EXCLUDED.last_name,
+      profile_image_url       = EXCLUDED.profile_image_url,
+      strava_access_token     = EXCLUDED.strava_access_token,
+      strava_refresh_token    = EXCLUDED.strava_refresh_token,
+      strava_token_expires_at = EXCLUDED.strava_token_expires_at,
+      strava_scope            = EXCLUDED.strava_scope,
+      measurement_preference  = EXCLUDED.measurement_preference,
+      updated_at              = NOW()
+    RETURNING id`;
+  const upsertUserParams = [
+    athlete.id,
+    athlete.username,
+    athlete.firstname,
+    athlete.lastname,
+    athlete.profile_medium ?? athlete.profile,
+    data.access_token,
+    data.refresh_token,
+    data.expires_at,
+    data.scope ?? null,
+    measurementPreference,
+  ];
+
+  // Invite codes are only a gate for brand-new accounts — a returning
+  // tester reconnecting (token refresh, scope change, etc.) already has a
+  // strava_id on file and skips the requirement entirely.
+  const existingUser = await query<{ id: string }>(
+    "SELECT id FROM users WHERE strava_id = $1",
+    [athlete.id]
+  );
+  const isNewUser = existingUser.rows.length === 0;
+
   let dbUserId: string | null = null;
-  try {
-    const result = await query<{ id: string }>(
-      `INSERT INTO users (
-        strava_id, username, first_name, last_name, profile_image_url,
-        strava_access_token, strava_refresh_token, strava_token_expires_at,
-        strava_scope, measurement_preference
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8), $9, $10)
-      ON CONFLICT (strava_id) DO UPDATE SET
-        username                = EXCLUDED.username,
-        first_name              = EXCLUDED.first_name,
-        last_name               = EXCLUDED.last_name,
-        profile_image_url       = EXCLUDED.profile_image_url,
-        strava_access_token     = EXCLUDED.strava_access_token,
-        strava_refresh_token    = EXCLUDED.strava_refresh_token,
-        strava_token_expires_at = EXCLUDED.strava_token_expires_at,
-        strava_scope            = EXCLUDED.strava_scope,
-        measurement_preference  = EXCLUDED.measurement_preference,
-        updated_at              = NOW()
-      RETURNING id`,
-      [
-        athlete.id,
-        athlete.username,
-        athlete.firstname,
-        athlete.lastname,
-        athlete.profile_medium ?? athlete.profile,
-        data.access_token,
-        data.refresh_token,
-        data.expires_at,
-        data.scope ?? null,
-        measurementPreference,
-      ]
-    );
-    dbUserId = result.rows[0]?.id ?? null;
-    console.log("[strava/callback] User upserted. DB id:", dbUserId);
-  } catch (err) {
-    // Log but don't block the auth flow — user can still reach the dashboard
-    console.error("[strava/callback] DB upsert failed:", err);
+
+  if (isNewUser) {
+    const inviteCode = cookieStore.get("strava_invite_code")?.value ?? null;
+
+    if (!inviteCode) {
+      console.warn("[strava/callback] New user with no invite code, rejecting:", athlete.id);
+      return NextResponse.redirect(`${homeUrl}?error=invalid_invite`);
+    }
+
+    // Claim the code and create the account in one transaction: SELECT ...
+    // FOR UPDATE blocks a second concurrent claim of the same code until
+    // this commits, and re-checks used_by IS NULL once unblocked — so two
+    // people racing on the same code can't both get an account out of it.
+    const client = await pool.connect();
+    let codeValid = false;
+    try {
+      await client.query("BEGIN");
+      const codeResult = await client.query(
+        "SELECT code FROM invite_codes WHERE code = $1 AND used_by IS NULL FOR UPDATE",
+        [inviteCode]
+      );
+      codeValid = codeResult.rows.length > 0;
+
+      if (codeValid) {
+        const result = await client.query<{ id: string }>(upsertUserSql, upsertUserParams);
+        dbUserId = result.rows[0]?.id ?? null;
+        if (dbUserId) {
+          await client.query(
+            "UPDATE invite_codes SET used_by = $1, used_at = NOW() WHERE code = $2",
+            [dbUserId, inviteCode]
+          );
+        }
+      }
+      await client.query(codeValid ? "COMMIT" : "ROLLBACK");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      console.error("[strava/callback] New-user signup transaction failed:", err);
+    } finally {
+      client.release();
+    }
+
+    if (!codeValid) {
+      console.warn("[strava/callback] Invite code invalid or already used:", inviteCode);
+      return NextResponse.redirect(`${homeUrl}?error=invalid_invite`);
+    }
+    console.log("[strava/callback] New user created via invite code. DB id:", dbUserId);
+  } else {
+    try {
+      const result = await query<{ id: string }>(upsertUserSql, upsertUserParams);
+      dbUserId = result.rows[0]?.id ?? null;
+      console.log("[strava/callback] Returning user upserted. DB id:", dbUserId);
+    } catch (err) {
+      // Log but don't block the auth flow — user can still reach the dashboard
+      console.error("[strava/callback] DB upsert failed:", err);
+    }
   }
 
   const response = NextResponse.redirect(new URL("/dashboard?autoSync=true", request.url));
@@ -138,6 +194,7 @@ export async function GET(request: NextRequest) {
   );
 
   response.cookies.delete("strava_oauth_state");
+  response.cookies.delete("strava_invite_code");
 
   return response;
 }

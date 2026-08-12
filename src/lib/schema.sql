@@ -295,6 +295,27 @@ CREATE TABLE IF NOT EXISTS trail_requests (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- ── invite_codes ─────────────────────────────────────────────
+-- Single-use beta access codes. used_by is set atomically at signup time
+-- (see the strava/callback transaction) so two people racing on the same
+-- code can't both claim it.
+CREATE TABLE IF NOT EXISTS invite_codes (
+  code       TEXT        PRIMARY KEY,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  used_by    UUID        REFERENCES users(id) ON DELETE SET NULL,
+  used_at    TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_invite_codes_used_by
+  ON invite_codes (used_by);
+
+-- ── waitlist ─────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS waitlist (
+  id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  email        TEXT        UNIQUE NOT NULL,
+  signed_up_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- ── Row-Level Security ──────────────────────────────────────
 -- The server connects as the postgres role which has BYPASSRLS in Supabase,
 -- so all server-side queries are unaffected. These settings block direct
@@ -309,6 +330,19 @@ ALTER TABLE activity_trail_matches     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE backfill_api_usage         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sync_log                   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trail_match_checks         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE invite_codes               ENABLE ROW LEVEL SECURITY;
+ALTER TABLE waitlist                   ENABLE ROW LEVEL SECURITY;
+
+-- Pre-populated beta codes for early testers. Fixed values + ON CONFLICT DO
+-- NOTHING so re-running this idempotent migration never rotates or
+-- duplicates them.
+INSERT INTO invite_codes (code) VALUES
+  ('MTL-G2EPAR'),
+  ('MTL-Y7SQYV'),
+  ('MTL-DYBSNN'),
+  ('MTL-3PNCNQ'),
+  ('MTL-2SFT57')
+ON CONFLICT (code) DO NOTHING;
 
 -- Trails are public reference data — allow anyone to read them
 DO $$
