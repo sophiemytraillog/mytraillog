@@ -9,6 +9,7 @@ import { computeTrailProgress, snapshotTrailProgress } from "@/lib/match-trails"
 import {
   getActivityTrailMatches,
   writeTrailDescription,
+  recordDescriptionUpdateFailure,
   ScopeError,
   StravaRateLimitError,
   type DescriptionMode,
@@ -390,6 +391,15 @@ export async function finishSync(
           break;
         }
         console.error("[sync-engine] Description update error:", err);
+
+        // Same bounded-retry give-up as update-descriptions' backlog scan —
+        // shares the same counter on the activity row, so an activity that
+        // fails here first still stops getting retried once the backlog
+        // scan (or a future sync) picks it up.
+        const { giveUp } = await recordDescriptionUpdateFailure(userId, act.id).catch(() => ({ giveUp: false }));
+        if (giveUp) {
+          await pool.query("UPDATE activities SET strava_description_updated = TRUE WHERE id = $1", [act.id]).catch(() => {});
+        }
       }
     }
   }

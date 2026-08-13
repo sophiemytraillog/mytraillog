@@ -1,6 +1,44 @@
 import { pool } from "@/lib/db";
 import { getValidAccessToken } from "@/lib/strava";
 import { formatDist, unitLabel, type DistanceUnit } from "@/lib/distance";
+import { logSyncEvent } from "@/lib/sync-log";
+
+// Matches the "3 attempts" convention already used elsewhere for transient
+// failures (see match-trails.ts) — enough to ride out a genuine blip, not so
+// many that a permanently-broken activity burns a lot of budget before
+// callers give up on it.
+const MAX_DESCRIPTION_UPDATE_ATTEMPTS = 3;
+
+/**
+ * Call from a catch block after writeTrailDescription throws anything other
+ * than ScopeError/StravaRateLimitError (those are handled separately by
+ * every caller — a scope error needs the user to reconnect, a rate limit
+ * needs to stop the whole run, neither is "this one activity is broken").
+ * Increments this activity's failure counter and reports whether the caller
+ * should give up and mark it checked. Confirmed necessary in practice: Strava
+ * returning a persistent 500 for GET on a specific activity (not transient —
+ * reproduced repeatedly against the same handful of activities on Rosie's
+ * account) would otherwise never set strava_description_updated, so it sits
+ * at the front of update-descriptions' backlog query forever and every
+ * future run re-attempts the same doomed activities before making any real
+ * progress through the rest of the backlog.
+ */
+export async function recordDescriptionUpdateFailure(
+  userId: string,
+  activityDbId: string
+): Promise<{ giveUp: boolean; attempts: number }> {
+  const { rows } = await pool.query<{ description_update_attempts: number }>(
+    `UPDATE activities SET description_update_attempts = description_update_attempts + 1
+     WHERE id = $1 RETURNING description_update_attempts`,
+    [activityDbId]
+  );
+  const attempts = rows[0]?.description_update_attempts ?? MAX_DESCRIPTION_UPDATE_ATTEMPTS;
+  const giveUp = attempts >= MAX_DESCRIPTION_UPDATE_ATTEMPTS;
+  if (giveUp) {
+    logSyncEvent(userId, "description_update_abandoned", { activityId: activityDbId, attempts });
+  }
+  return { giveUp, attempts };
+}
 
 async function fetchWithTimeout(url: string, options: RequestInit, ms = 30_000): Promise<Response> {
   const ac = new AbortController();

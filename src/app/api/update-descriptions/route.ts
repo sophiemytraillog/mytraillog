@@ -4,6 +4,7 @@ import { pool } from "@/lib/db";
 import {
   getActivityTrailMatches,
   writeTrailDescription,
+  recordDescriptionUpdateFailure,
   ScopeError,
   StravaRateLimitError,
   type DescriptionMode,
@@ -282,6 +283,23 @@ export async function GET(request: NextRequest) {
               if (err instanceof ScopeError) {
                 send("scope_error", { message });
                 return;
+              }
+
+              // Generic failure — most commonly Strava itself erroring on
+              // this specific activity (confirmed: a persistent 500 on
+              // GET, reproducible every attempt, not transient). Bounded
+              // retry so a permanently-broken activity can't sit at the
+              // front of the backlog query forever, blocking every future
+              // run from ever reaching real progress.
+              const { giveUp, attempts } = await recordDescriptionUpdateFailure(userId, act.id);
+              if (giveUp) {
+                console.warn(
+                  `[update-descriptions] Giving up on ${act.id} after ${attempts} failed attempts — marking checked`
+                );
+                await pool.query(
+                  "UPDATE activities SET strava_description_updated = TRUE WHERE id = $1",
+                  [act.id]
+                ).catch(() => {});
               }
             }
           }

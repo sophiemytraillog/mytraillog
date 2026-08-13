@@ -11,6 +11,7 @@ import { computeTrailProgress, snapshotTrailProgress } from "@/lib/match-trails"
 import {
   getActivityTrailMatches,
   writeTrailDescription,
+  recordDescriptionUpdateFailure,
   ScopeError,
   type DescriptionMode,
 } from "@/lib/trail-descriptions";
@@ -359,11 +360,23 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number) {
         await writeTrailDescription(
           user.id, savedAct.id, activityId, matches, userPrefs.description_mode ?? "full"
         )
-          .catch((err) => {
+          .catch(async (err) => {
             if (err instanceof ScopeError) {
               console.warn(`[webhook/strava] Scope error — user needs to reconnect: ${err.message}`);
-            } else {
-              console.error(`[webhook/strava] Description update failed:`, err);
+              return;
+            }
+            console.error(`[webhook/strava] Description update failed:`, err);
+            // Shares the same bounded-retry counter as update-descriptions'
+            // backlog scan — an activity that fails here first still stops
+            // getting retried once the backlog scan later picks it up, and
+            // vice versa: if this call happens to be the one that crosses
+            // the threshold, finalize it here too.
+            const { giveUp } = await recordDescriptionUpdateFailure(user.id, savedAct.id).catch(() => ({ giveUp: false }));
+            if (giveUp) {
+              await pool.query(
+                "UPDATE activities SET strava_description_updated = TRUE WHERE id = $1",
+                [savedAct.id]
+              ).catch(() => {});
             }
           });
       }

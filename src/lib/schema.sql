@@ -177,6 +177,15 @@ BEGIN
 END
 $$;
 ALTER TABLE activities ADD COLUMN IF NOT EXISTS strava_description_updated BOOLEAN NOT NULL DEFAULT FALSE;
+-- Bounded-retry counter for writeTrailDescription failures — e.g. Strava
+-- persistently returning 500 on GET for a specific old/malformed activity
+-- (confirmed on Rosie's account: same handful of activities, same error,
+-- every single attempt, not transient). Without this, a permanently-
+-- failing activity never gets strava_description_updated set, so it sits
+-- at the front of update-descriptions' backlog query forever — every
+-- future run re-attempts the same doomed activities before reaching any
+-- real progress. See recordDescriptionUpdateFailure in trail-descriptions.ts.
+ALTER TABLE activities ADD COLUMN IF NOT EXISTS description_update_attempts INTEGER NOT NULL DEFAULT 0;
 -- Heartbeat updated on every page fetched during a sync chunk (see
 -- src/lib/sync-engine.ts). Lets the dashboard self-heal check and the cron
 -- sweep tell "still actively syncing right now" apart from "genuinely stuck"
