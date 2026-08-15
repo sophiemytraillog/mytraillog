@@ -75,7 +75,17 @@ export async function GET(req: Request) {
 // ── POST: Event callback ───────────────────────────────────────────────────────
 // Strava requires a 200 response within 2 seconds.
 // Deauth events are processed synchronously (fast DB delete, must not be missed).
-// New activity events are processed in the background (trail matching can be slow).
+// New activity events are processed in the background (trail matching can be slow) —
+// via waitUntil(), which lets handleNewActivity keep running after the response is
+// sent, up to this configured ceiling. Vercel Hobby plan hard-caps function
+// duration at 60s — this cannot be raised without a plan upgrade (same ceiling
+// used by every other heavy route in this app, see vercel.json). Still not
+// enough to let TRAIL_MATCHING_TIME_BUDGET_MS's background continuation
+// actually finish for a power user (confirmed: 127-283s for 5-7 nearby
+// trails), but every extra second here is a second less work update-descriptions'
+// backlog scan has left to do later.
+export const maxDuration = 60;
+
 export async function POST(req: Request) {
   let event: StravaWebhookEvent;
   try {
@@ -316,6 +326,29 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number) {
     );
     const trailIds = nearbyTrails.map(r => r.id);
 
+    // Register these as description-backfill candidates immediately, from
+    // the same cheap proximity check above — not gated behind the expensive
+    // per-trail union computation below. Confirmed in production (Glen: 5
+    // trails, David: 7) that computeTrailProgress can take 2-5 *minutes* for
+    // a handful of nearby trails, far past anything a single invocation can
+    // wait out. activity_trail_matches previously only got a row for a
+    // trail as a side effect of that slow loop finishing that trail's
+    // ACTIVITY_MATCH_SQL step — so when the invocation got cut off partway
+    // through, later trails never became backfill candidates either,
+    // making the activity invisible to BOTH the real-time write AND the
+    // update-descriptions safety net that's supposed to catch what
+    // real-time missed.
+    if (trailIds.length > 0) {
+      await pool.query(
+        `INSERT INTO activity_trail_matches (activity_id, trail_id, user_id)
+         SELECT $1, id, $2 FROM UNNEST($3::uuid[]) AS id
+         ON CONFLICT (activity_id, trail_id) DO NOTHING`,
+        [savedAct.id, user.id, trailIds]
+      ).catch((err) => {
+        console.error(`[webhook/strava] Failed to register backfill candidates for activity ${activityId}:`, err);
+      });
+    }
+
     // Snapshot completed_distance before/after matching so writeTrailDescription
     // can report exactly how much new ground THIS activity added — see the
     // comment on snapshotTrailProgress. Only meaningful for the nearby-trails
@@ -338,7 +371,7 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number) {
     );
     if (matchResult === "timed_out") {
       console.warn(
-        `[webhook/strava] Trail matching for activity ${activityId} exceeded ${TRAIL_MATCHING_TIME_BUDGET_MS}ms — proceeding to description write with whatever's already matched; remaining trails keep processing in the background and will be picked up next time`
+        `[webhook/strava] Trail matching for activity ${activityId} exceeded ${TRAIL_MATCHING_TIME_BUDGET_MS}ms — remaining trails keep processing in the background and will be picked up next time`
       );
     } else {
       console.log(
@@ -346,8 +379,19 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number) {
       );
     }
 
-    // Optionally append trail info to the Strava activity description
-    if (wantsDescriptionUpdate) {
+    // Optionally append trail info to the Strava activity description.
+    // Skipped entirely (not attempted with a guessed value) when matching
+    // timed out: the "after" snapshot below would be taken before the
+    // still-running background matching has actually landed its DB
+    // updates, making every trail's new-ground delta compute as a false
+    // zero — confirmed in production, this is exactly what silently
+    // blocked Glen's and David's 'new_with_totals' writes despite both
+    // activities genuinely covering several km of new ground. Since
+    // activity_trail_matches is now registered unconditionally above,
+    // update-descriptions' backlog scan will find and correctly write
+    // this once matching actually finishes, instead of the write being
+    // lost here with a wrong answer.
+    if (wantsDescriptionUpdate && matchResult !== "timed_out") {
       const afterSnapshot = await snapshotTrailProgress(user.id, trailIds);
       const newGroundByTrailId = new Map(
         trailIds.map((id) => [id, Math.max(0, (afterSnapshot.get(id) ?? 0) - (beforeSnapshot.get(id) ?? 0))])

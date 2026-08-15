@@ -9,6 +9,9 @@
     },
     "src/app/api/cron/resume-stuck-syncs/route.ts": {
       "maxDuration": 60
+    },
+    "src/app/api/webhook/strava/route.ts": {
+      "maxDuration": 60
     }
   },
   "crons": [

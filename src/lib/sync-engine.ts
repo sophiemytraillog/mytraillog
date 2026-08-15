@@ -323,6 +323,38 @@ export async function finishSync(
       processing: trailIds.length,
       deferred: allTrailIds.length - trailIds.length,
     });
+
+    // Register these as description-backfill candidates immediately, from
+    // the same cheap bbox pre-filter above — not gated behind
+    // computeTrailProgress's per-trail union computation, which can run
+    // 2-5+ minutes for a handful of trails on an active account (confirmed:
+    // Glen 127s/5 trails, David 283s/7 trails) and get this whole
+    // invocation killed by Vercel's hard function-duration cap before it
+    // finishes. Previously activity_trail_matches only got a row for a
+    // trail as a side effect of that slow loop reaching it, so a killed
+    // invocation left later trails invisible to update-descriptions' backlog
+    // scan too — the safety net that's supposed to catch what real-time
+    // missed silently couldn't see these activities at all.
+    if (trailIds.length > 0) {
+      // Real ST_DWithin check, not a blind cartesian product — bounded to
+      // just this batch's new activities against just its nearby trails
+      // (both small sets already), so a precise per-pair proximity check
+      // is cheap here even though it isn't at the full-account scale
+      // ACTIVITY_MATCH_SQL normally runs at.
+      await pool.query(
+        `INSERT INTO activity_trail_matches (activity_id, trail_id, user_id)
+         SELECT a.id, t.id, $1
+         FROM activities a
+         JOIN trails t ON t.id = ANY($2::uuid[])
+           AND ST_DWithin(a.geometry::geography, t.geometry::geography, 50)
+         WHERE a.id = ANY($3::uuid[]) AND a.geometry IS NOT NULL
+         ON CONFLICT (activity_id, trail_id) DO NOTHING`,
+        [userId, trailIds, newDbIds]
+      ).catch((err) => {
+        console.error("[sync-engine] Failed to register backfill candidates:", err);
+      });
+    }
+
     const beforeSnapshot = wantsDescriptionUpdate
       ? await snapshotTrailProgress(userId, trailIds)
       : new Map<string, number>();
