@@ -401,11 +401,27 @@ export async function finishSync(
     for (const act of toUpdate) {
       try {
         const matches = await getActivityTrailMatches(userId, act.id, newGroundByTrailId);
-        // new_trail_distance_m is derived from this activity's own (permanent)
-        // start_date relative to the user's other activities, so this result
-        // can never change later — safe to mark checked whenever there's
-        // nothing to write, whether that's no trail overlap at all or (in
-        // new_only/new_with_totals) no new ground on any matched trail.
+
+        // matches.length === 0 is ambiguous — getActivityTrailMatches only
+        // returns a trail once user_trail_progress has a real row for it,
+        // so this can mean either "genuinely no trail overlap" or "matching
+        // hasn't landed a progress row for this activity's trails yet".
+        // Confirmed on Amy's account: marking this checked closed the door
+        // on ever writing a real description once matching did catch up,
+        // permanently — the backlog scan can't rediscover an activity once
+        // it's flagged done. Leave it false and just move on; a later sync
+        // or the update-descriptions backlog will re-check once matching
+        // has actually finished.
+        if (matches.length === 0) continue;
+
+        // Past this point matches.length > 0 is a confirmed, real trail
+        // overlap — mode filtering deciding there's nothing new to write is
+        // a deterministic fact about this activity (new_trail_distance_m
+        // comes from this batch's own just-computed snapshot delta, not a
+        // guess), safe to close out permanently. Without this, new_only/
+        // new_with_totals activities on an already-fully-covered route
+        // would get re-checked forever — the exact "stuck re-checking the
+        // same activities" bug this app hit once already (Rosie's backlog).
         const relevantMatches = mode === "full" ? matches : matches.filter((m) => m.new_trail_distance_m > 0);
         if (relevantMatches.length > 0) {
           const updated = await writeTrailDescription(userId, act.id, parseInt(act.strava_activity_id), matches, mode);

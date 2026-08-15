@@ -202,21 +202,36 @@ export async function GET(request: NextRequest) {
 
             try {
               const matches = await getActivityTrailMatches(userId, act.id);
-              // new_trail_distance_m is derived from this activity's own
-              // (permanent) start_date, so this result can never change
-              // later — safe to pre-filter here and skip the Strava-calling
-              // path (and its backfill-budget cost) entirely for anything
-              // new_only/new_with_totals would end up writing nothing for.
-              const relevantMatches = mode === "full" ? matches : matches.filter((m) => m.new_trail_distance_m > 0);
 
+              // matches.length === 0 is ambiguous — getActivityTrailMatches
+              // only returns a trail once user_trail_progress has a real row
+              // for it, so this can mean either "activity_trail_matches was
+              // a false positive" (coarse simplified-geometry candidate) or
+              // "matching hasn't landed a progress row for this activity's
+              // trails yet". Confirmed on Amy's account: marking this
+              // checked closed the door on ever writing a real description
+              // once matching did catch up, permanently — this backlog scan
+              // can't rediscover an activity once it's flagged done. Leave
+              // it false and move on to the next candidate; a future run of
+              // this same scan will re-check it once matching has finished.
+              if (matches.length === 0) {
+                console.log(`[update-descriptions] Skipping ${i + 1}/${total} for now — no confirmed trail match yet: ${act.name}`);
+                continue;
+              }
+
+              // Past this point matches.length > 0 is a confirmed, real
+              // trail overlap. new_trail_distance_m here always comes from
+              // activity_trail_distance_m (no snapshot override in this
+              // backfill path) — a fixed geometric property of this
+              // activity, not a guess — so mode filtering finding nothing
+              // new is a deterministic, permanent fact, safe to close out.
+              // Without this, new_only/new_with_totals activities on an
+              // already-fully-covered route would get re-checked forever —
+              // the exact "stuck re-checking the same activities" bug this
+              // app hit once already (Rosie's backlog).
+              const relevantMatches = mode === "full" ? matches : matches.filter((m) => m.new_trail_distance_m > 0);
               if (relevantMatches.length === 0) {
-                console.log(`[update-descriptions] Skipping ${i + 1}/${total} — no trail match: ${act.name}`);
-                // activity_trail_matches is a coarse candidate list (simplified
-                // trail geometry) — this activity was either a false positive
-                // there, or (new_only/new_with_totals) matched but covered no
-                // new ground. Mark it checked anyway so it doesn't keep
-                // reappearing at the front of the queue on every future run,
-                // blocking progress on the rest of the backlog.
+                console.log(`[update-descriptions] Skipping ${i + 1}/${total} — confirmed no new ground: ${act.name}`);
                 await pool.query(
                   "UPDATE activities SET strava_description_updated = TRUE WHERE id = $1",
                   [act.id]
