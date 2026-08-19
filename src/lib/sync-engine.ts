@@ -308,11 +308,20 @@ export async function finishSync(
   let newGroundByTrailId = new Map<string, number>();
 
   try {
+    // National Trails first within the cap below — they're the ~20 trails
+    // (of 1,181) users actually look for immediately, so a brand-new
+    // account should see progress on those right away rather than whatever
+    // 40 happen to come back from the bbox scan in no particular order.
+    // Wrapped in a subquery because Postgres rejects an ORDER BY expression
+    // on SELECT DISTINCT unless it's plain output columns.
     const { rows: nearbyTrails } = await pool.query<{ id: string }>(
-      `SELECT DISTINCT t.id
-       FROM activities a
-       JOIN trails t ON t.simplified_geometry && ST_Expand(a.geometry, ${NEARBY_TRAILS_BBOX_DEGREES})
-       WHERE a.id = ANY($1::uuid[]) AND a.geometry IS NOT NULL`,
+      `SELECT id FROM (
+         SELECT DISTINCT t.id, t.category, t.name
+         FROM activities a
+         JOIN trails t ON t.simplified_geometry && ST_Expand(a.geometry, ${NEARBY_TRAILS_BBOX_DEGREES})
+         WHERE a.id = ANY($1::uuid[]) AND a.geometry IS NOT NULL
+       ) nearby
+       ORDER BY (category = 'national_trail') DESC, name ASC`,
       [newDbIds]
     );
     const allTrailIds = nearbyTrails.map((r) => r.id);

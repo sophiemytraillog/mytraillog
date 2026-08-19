@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import SyncButton from "./SyncButton";
+import TrailMatchProgress from "./TrailMatchProgress";
 import TrailProgressList from "./TrailProgressList";
 import NationalTrailsList from "./NationalTrailsList";
 import UpdateDescriptionsButton from "./UpdateDescriptionsButton";
@@ -61,6 +62,7 @@ interface Props {
   descriptionMode: DescriptionMode;
   hasWriteScope: boolean;
   includeCycling: boolean;
+  matchProgress: { totalChecked: number; totalTrails: number };
 }
 
 function LogoIcon({ className }: { className?: string }) {
@@ -94,7 +96,7 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
 }
 
 export default function DashboardClient({
-  athlete, stats, trails, activityCount, autoSync, stravaDescriptionUpdates, descriptionMode, hasWriteScope, includeCycling,
+  athlete, stats, trails, activityCount, autoSync, stravaDescriptionUpdates, descriptionMode, hasWriteScope, includeCycling, matchProgress,
 }: Props) {
   const { unit, setUnit } = useDistanceUnit();
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
@@ -312,6 +314,14 @@ export default function DashboardClient({
                 autoSync={autoSync}
                 initialActivityCount={activityCount}
                 onSyncComplete={() => setLastSyncedAt(new Date())}
+              />
+              {/* Remounts (fresh initialChecked/initialTotal from the server)
+                  every time a sync finishes, so it always picks up from
+                  wherever that sync's own inline matching just left off. */}
+              <TrailMatchProgress
+                key={lastSyncedAt ? lastSyncedAt.getTime() : "never"}
+                initialChecked={matchProgress.totalChecked}
+                initialTotal={matchProgress.totalTrails}
               />
 
               {/* Description updates setting */}

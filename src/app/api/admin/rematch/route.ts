@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { query } from "@/lib/db";
-import { computeTrailProgress } from "@/lib/match-trails";
+import { matchNextBatch } from "@/lib/match-trails";
 import { ADMIN_USER_ID } from "@/lib/admin";
 import { logSyncEvent } from "@/lib/sync-log";
 
@@ -10,37 +10,6 @@ export const maxDuration = 60;
 
 const TIME_BUDGET_MS = 45_000;
 const PAGE_SIZE = 30;
-const MAX_ATTEMPTS = 3;
-const RETRY_DELAY_MS = 1_500;
-
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-// computeTrailProgress already catches every per-trail error internally and
-// never throws — it just logs and moves on — so a caller can't tell success
-// from failure via try/catch. trail_match_checks is only written on the
-// success path (see match-trails.ts), so its presence after the call IS the
-// success signal: retry until it appears, up to MAX_ATTEMPTS, with a short
-// backoff for transient connection drops to actually clear before retrying.
-async function attemptTrailWithRetry(
-  userId: string,
-  trailId: string
-): Promise<{ ok: boolean; matched: boolean }> {
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    await computeTrailProgress(userId, [trailId]);
-    const { rows } = await query<{ matched: boolean }>(
-      "SELECT matched FROM trail_match_checks WHERE user_id = $1 AND trail_id = $2",
-      [userId, trailId]
-    );
-    if (rows.length > 0) return { ok: true, matched: rows[0].matched };
-    if (attempt < MAX_ATTEMPTS) {
-      console.warn(`[admin/rematch] Trail ${trailId} attempt ${attempt}/${MAX_ATTEMPTS} failed, retrying in ${RETRY_DELAY_MS}ms`);
-      await sleep(RETRY_DELAY_MS);
-    }
-  }
-  return { ok: false, matched: false };
-}
 
 // Manual escape hatch for a user whose sync completed (or is stuck) but
 // somehow ended up with zero trail matches — see the Paul Crowe investigation
@@ -74,72 +43,22 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "No such user" }, { status: 404 });
   }
 
-  const startedAt = Date.now();
-
-  const { rows: candidates } = await query<{ id: string; name: string }>(
-    `SELECT t.id, t.name
-     FROM trails t
-     WHERE NOT EXISTS (
-       SELECT 1 FROM trail_match_checks c WHERE c.user_id = $1 AND c.trail_id = t.id
-     )
-     ORDER BY (t.category = 'national_trail') DESC, t.name ASC
-     LIMIT $2`,
-    [userId, PAGE_SIZE]
-  );
-
-  let checkedThisCall = 0;
-  let matchedThisCall = 0;
-  const stillFailing: typeof candidates = [];
-
-  for (const trail of candidates) {
-    if (Date.now() - startedAt > TIME_BUDGET_MS) break;
-    const { ok, matched } = await attemptTrailWithRetry(userId, trail.id);
-    if (ok) {
-      checkedThisCall++;
-      if (matched) matchedThisCall++;
-    } else {
-      console.error(`[admin/rematch] Trail ${trail.name} failed all ${MAX_ATTEMPTS} attempts — deferred`);
-      stillFailing.push(trail);
-    }
-  }
-
-  // Come back to skipped trails before returning, if there's still budget —
-  // a trail that failed because of a transient blip earlier in this call
-  // may well succeed a few seconds later without needing a whole new call.
-  for (const trail of stillFailing) {
-    if (Date.now() - startedAt > TIME_BUDGET_MS) break;
-    const { ok, matched } = await attemptTrailWithRetry(userId, trail.id);
-    if (ok) {
-      checkedThisCall++;
-      if (matched) matchedThisCall++;
-    }
-    // Still failing after this — left unchecked, picked up by a future call.
-  }
-
-  const { rows: [totals] } = await query<{ total: string; checked: string }>(
-    `SELECT
-       (SELECT COUNT(*) FROM trails) AS total,
-       (SELECT COUNT(*) FROM trail_match_checks WHERE user_id = $1) AS checked`,
-    [userId]
-  );
-  const totalTrails = parseInt(totals.total);
-  const totalChecked = parseInt(totals.checked);
-  const done = totalChecked >= totalTrails;
+  const result = await matchNextBatch(userId, PAGE_SIZE, TIME_BUDGET_MS);
 
   logSyncEvent(userId, "admin_rematch_call", {
     triggeredBy: callerId,
-    checkedThisCall,
-    matchedThisCall,
-    totalChecked,
-    totalTrails,
-    done,
+    checkedThisCall: result.checkedThisBatch,
+    matchedThisCall: result.matchedThisBatch,
+    totalChecked: result.totalChecked,
+    totalTrails: result.totalTrails,
+    done: result.done,
   });
 
   return NextResponse.json({
-    matchedTrails: matchedThisCall,
-    checkedThisCall,
-    totalChecked,
-    totalTrails,
-    done,
+    matchedTrails: result.matchedThisBatch,
+    checkedThisCall: result.checkedThisBatch,
+    totalChecked: result.totalChecked,
+    totalTrails: result.totalTrails,
+    done: result.done,
   });
 }

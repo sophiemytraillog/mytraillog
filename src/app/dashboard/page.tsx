@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { query } from "@/lib/db";
+import { getMatchProgress } from "@/lib/match-trails";
 import DashboardClient, { type TrailRow } from "./DashboardClient";
 
 interface Athlete {
@@ -141,6 +142,19 @@ export default async function Dashboard({
     }
   }
 
+  // How far finishSync's capped inline matching (and any continuation
+  // since) has gotten through the trail catalog — TrailMatchProgress uses
+  // this to show "Matching trails: X of Y checked" and picks up wherever
+  // this left off instead of waiting on the daily cron sweep.
+  let matchProgress = { totalChecked: 0, totalTrails: 0 };
+  if (userId) {
+    try {
+      matchProgress = await getMatchProgress(userId);
+    } catch (err) {
+      console.error("[dashboard] Failed to load match progress:", err);
+    }
+  }
+
   return (
     <DashboardClient
       athlete={athlete}
@@ -152,6 +166,7 @@ export default async function Dashboard({
       descriptionMode={descriptionMode}
       hasWriteScope={stravaScope?.includes("activity:write") ?? false}
       includeCycling={includeCycling}
+      matchProgress={matchProgress}
     />
   );
 }

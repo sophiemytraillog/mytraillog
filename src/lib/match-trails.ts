@@ -201,3 +201,119 @@ export async function computeTrailProgress(userId: string, trailIds?: string[]):
 
   return matched;
 }
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+const BATCH_MAX_ATTEMPTS = 3;
+const BATCH_RETRY_DELAY_MS = 1_500;
+
+// computeTrailProgress already catches every per-trail error internally and
+// never throws — it just logs and moves on — so a caller can't tell success
+// from failure via try/catch. trail_match_checks is only written on the
+// success path above, so its presence after the call IS the success signal:
+// retry until it appears, up to BATCH_MAX_ATTEMPTS, with a short backoff for
+// transient connection drops to actually clear before retrying.
+async function attemptTrailWithRetry(userId: string, trailId: string): Promise<{ ok: boolean; matched: boolean }> {
+  for (let attempt = 1; attempt <= BATCH_MAX_ATTEMPTS; attempt++) {
+    await computeTrailProgress(userId, [trailId]);
+    const { rows } = await pool.query<{ matched: boolean }>(
+      "SELECT matched FROM trail_match_checks WHERE user_id = $1 AND trail_id = $2",
+      [userId, trailId]
+    );
+    if (rows.length > 0) return { ok: true, matched: rows[0].matched };
+    if (attempt < BATCH_MAX_ATTEMPTS) await sleep(BATCH_RETRY_DELAY_MS);
+  }
+  return { ok: false, matched: false };
+}
+
+export interface MatchBatchResult {
+  checkedThisBatch: number;
+  matchedThisBatch: number;
+  totalChecked: number;
+  totalTrails: number;
+  done: boolean;
+}
+
+// Processes up to `limit` not-yet-checked trails for one user, National
+// Trails first (the ~20 of 1,181 users actually look for), resumable via
+// trail_match_checks same as everywhere else this table is used. This is
+// the shared implementation behind: the client-driven continuation that
+// picks up where finishSync's own capped inline pass leaves off (see
+// /api/sync/match-trails), the daily cron's catch-up sweep, and the manual
+// /api/admin/rematch escape hatch — one code path so none of the three can
+// duplicate work or drift out of sync with each other.
+export async function matchNextBatch(
+  userId: string,
+  limit: number,
+  timeBudgetMs?: number
+): Promise<MatchBatchResult> {
+  const startedAt = Date.now();
+
+  const { rows: candidates } = await pool.query<{ id: string }>(
+    `SELECT t.id
+     FROM trails t
+     WHERE NOT EXISTS (
+       SELECT 1 FROM trail_match_checks c WHERE c.user_id = $1 AND c.trail_id = t.id
+     )
+     ORDER BY (t.category = 'national_trail') DESC, t.name ASC
+     LIMIT $2`,
+    [userId, limit]
+  );
+
+  let checkedThisBatch = 0;
+  let matchedThisBatch = 0;
+  const stillFailing: string[] = [];
+
+  for (const trail of candidates) {
+    if (timeBudgetMs !== undefined && Date.now() - startedAt > timeBudgetMs) break;
+    const { ok, matched } = await attemptTrailWithRetry(userId, trail.id);
+    if (ok) {
+      checkedThisBatch++;
+      if (matched) matchedThisBatch++;
+    } else {
+      stillFailing.push(trail.id);
+    }
+  }
+
+  // Same pattern as computeTrailProgress's own caller loops elsewhere: a
+  // trail that failed because of a transient blip earlier in this call may
+  // well succeed a few seconds later, worth one more try before giving up
+  // for this call.
+  for (const trailId of stillFailing) {
+    if (timeBudgetMs !== undefined && Date.now() - startedAt > timeBudgetMs) break;
+    const { ok, matched } = await attemptTrailWithRetry(userId, trailId);
+    if (ok) {
+      checkedThisBatch++;
+      if (matched) matchedThisBatch++;
+    }
+  }
+
+  const { rows: [totals] } = await pool.query<{ total: string; checked: string }>(
+    `SELECT
+       (SELECT COUNT(*) FROM trails) AS total,
+       (SELECT COUNT(*) FROM trail_match_checks WHERE user_id = $1) AS checked`,
+    [userId]
+  );
+  const totalTrails = parseInt(totals.total);
+  const totalChecked = parseInt(totals.checked);
+
+  return {
+    checkedThisBatch,
+    matchedThisBatch,
+    totalChecked,
+    totalTrails,
+    done: totalChecked >= totalTrails,
+  };
+}
+
+export async function getMatchProgress(userId: string): Promise<{ totalChecked: number; totalTrails: number }> {
+  const { rows: [totals] } = await pool.query<{ total: string; checked: string }>(
+    `SELECT
+       (SELECT COUNT(*) FROM trails) AS total,
+       (SELECT COUNT(*) FROM trail_match_checks WHERE user_id = $1) AS checked`,
+    [userId]
+  );
+  return { totalTrails: parseInt(totals.total), totalChecked: parseInt(totals.checked) };
+}
