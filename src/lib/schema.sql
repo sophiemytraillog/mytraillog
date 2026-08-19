@@ -242,6 +242,51 @@ CREATE TABLE IF NOT EXISTS trail_match_checks (
   PRIMARY KEY (user_id, trail_id)
 );
 
+-- DB-level backstop keeping trail_match_checks and user_trail_progress from
+-- silently disagreeing with EACH OTHER (not with the user's real geometry —
+-- that's what matchNextBatch's staleness re-check exists for, see
+-- match-trails.ts; a trigger can't cheaply verify a multi-minute PostGIS
+-- union/intersection on every write, that's the whole reason this is a
+-- deferred batch process rather than inline). A plain FK can't express this:
+-- trail_match_checks rows with matched=false are supposed to have no
+-- user_trail_progress row (that's the whole point of the table, see its
+-- comment above) — the invariant only holds one-directionally, matched=true
+-- implies a progress row must exist, which is exactly what a trigger can
+-- enforce and a column-level constraint can't.
+--
+-- Second Chris Rance investigation, 2026-08-19: the actual reported bug
+-- (South Downs Way showing 0km despite real contributing activities) was
+-- root-caused to trail_match_checks going stale, not these two tables
+-- drifting from each other — but the two ARE two independently-written
+-- bookkeeping tables (see computeTrailProgress in match-trails.ts: MATCH_SQL
+-- writes user_trail_progress, a separate later statement writes
+-- trail_match_checks), so nothing before this stopped a future code change
+-- from writing one without the other. This trigger makes that impossible
+-- rather than relying on every future caller remembering to do both.
+CREATE OR REPLACE FUNCTION trigger_sync_trail_match_checks()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    -- No progress row left for this pair — clear the checkpoint too, so a
+    -- deliberately-deleted (e.g. manually corrected) progress row is
+    -- eligible to be picked up and recomputed again, instead of matchNextBatch
+    -- treating a now-nonexistent match as still "checked, matched=true" forever.
+    DELETE FROM trail_match_checks WHERE user_id = OLD.user_id AND trail_id = OLD.trail_id;
+    RETURN OLD;
+  END IF;
+
+  INSERT INTO trail_match_checks (user_id, trail_id, matched, checked_at)
+  VALUES (NEW.user_id, NEW.trail_id, TRUE, NOW())
+  ON CONFLICT (user_id, trail_id) DO UPDATE SET matched = TRUE, checked_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS user_trail_progress_sync_checks ON user_trail_progress;
+CREATE TRIGGER user_trail_progress_sync_checks
+  AFTER INSERT OR UPDATE OR DELETE ON user_trail_progress
+  FOR EACH ROW EXECUTE FUNCTION trigger_sync_trail_match_checks();
+
 -- Pre-computed ST_SimplifyPreserveTopology(geometry, 0.001), materialized
 -- and indexed rather than recomputed inline on every query. Several spatial
 -- pre-filter queries (finishSync's nearbyTrails lookup, backfill-cycling)

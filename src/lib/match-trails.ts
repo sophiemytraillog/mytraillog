@@ -236,14 +236,38 @@ export interface MatchBatchResult {
   done: boolean;
 }
 
-// Processes up to `limit` not-yet-checked trails for one user, National
-// Trails first (the ~20 of 1,181 users actually look for), resumable via
-// trail_match_checks same as everywhere else this table is used. This is
-// the shared implementation behind: the client-driven continuation that
-// picks up where finishSync's own capped inline pass leaves off (see
-// /api/sync/match-trails), the daily cron's catch-up sweep, and the manual
-// /api/admin/rematch escape hatch — one code path so none of the three can
-// duplicate work or drift out of sync with each other.
+// Same bbox tolerance as sync-engine.ts's NEARBY_TRAILS_BBOX_DEGREES —
+// see that file's comment for why plain geometry `&&` against
+// simplified_geometry (not ST_DWithin/::geography) is what actually uses
+// the GIST index here.
+const STALE_CHECK_BBOX_DEGREES = 0.003;
+
+// Processes up to `limit` trails for one user, National Trails first (the
+// ~20 of 1,181 users actually look for). "Needs checking" means either
+// never checked, OR checked before an activity that's now spatially near
+// it was added — see the STALE clause below for why that second case is
+// essential, not an edge case.
+//
+// Root cause of the recurring "activities clearly overlap this trail but
+// completed_distance/completion_percentage sit at zero" reports (David,
+// Paul, and now Chris Rance's South Downs Way, 2026-08-19): every one of
+// this table's readers — this function, the old duplicated versions in
+// admin/rematch and the cron sweep — treated trail_match_checks as a
+// permanent, one-time verdict. It isn't. A trail legitimately gets
+// matched=false when it's checked before the relevant activity has synced
+// yet (confirmed for Chris: all 23 activities that overlap South Downs Way
+// were inserted 22-29 minutes AFTER a rematch pass had already checked it
+// and moved on) — sync and matching sweeps run concurrently by design (the
+// dashboard's own TrailMatchProgress starts sweeping immediately, not
+// waiting for an in-flight sync to finish), so this isn't a rare race, it's
+// an expected outcome that nothing ever revisited. The STALE clause below
+// re-surfaces exactly those trails: NOT "recheck everything whenever
+// anything changes" (which would re-run the expensive MATCH_SQL union
+// against all ~1,180 trails every single sync, for every user), but "only
+// this trail, only if a new activity landed within its own bbox" — the
+// same cheap, indexed `&&` pre-filter finishSync already uses to find
+// candidates for brand-new activities, just applied to already-checked
+// trails too instead of only ever-unchecked ones.
 export async function matchNextBatch(
   userId: string,
   limit: number,
@@ -254,9 +278,15 @@ export async function matchNextBatch(
   const { rows: candidates } = await pool.query<{ id: string }>(
     `SELECT t.id
      FROM trails t
-     WHERE NOT EXISTS (
-       SELECT 1 FROM trail_match_checks c WHERE c.user_id = $1 AND c.trail_id = t.id
-     )
+     LEFT JOIN trail_match_checks c ON c.user_id = $1 AND c.trail_id = t.id
+     WHERE c.trail_id IS NULL
+        OR EXISTS (
+          SELECT 1 FROM activities a
+          WHERE a.user_id = $1
+            AND a.geometry IS NOT NULL
+            AND a.created_at > c.checked_at
+            AND t.simplified_geometry && ST_Expand(a.geometry, ${STALE_CHECK_BBOX_DEGREES})
+        )
      ORDER BY (t.category = 'national_trail') DESC, t.name ASC
      LIMIT $2`,
     [userId, limit]
