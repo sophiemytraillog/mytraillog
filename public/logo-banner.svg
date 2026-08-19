@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 220" width="700" height="220">
+  <!-- Cream background -->
+  <rect width="700" height="220" fill="#FAF8F5"/>
+
+  <!-- Mountain mark (matches icon.svg), scaled and centered vertically -->
+  <g transform="translate(40 35) scale(0.586)">
+    <path d="M 28 214 L 86 94 L 120 126 L 162 52 L 228 214 Z" fill="#C4652A"/>
+    <path d="M 198 210 Q 180 130 162 52"
+          stroke="#FAF8F5" stroke-width="10" stroke-linecap="round"
+          fill="none"/>
+    <circle cx="162" cy="52" r="11" fill="#FAF8F5"/>
+  </g>
+
+  <!-- Wordmark -->
+  <text x="230" y="133" font-family="Arial, Helvetica, sans-serif" font-weight="700"
+        font-size="72" letter-spacing="-1" fill="#2C2520">My Trail Log</text>
+</svg>
