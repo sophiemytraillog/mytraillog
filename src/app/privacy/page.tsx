@@ -47,7 +47,7 @@ export default function PrivacyPage() {
               Legal
             </div>
             <h1 className="text-3xl font-extrabold text-[#2C2520] tracking-tight mb-2">Privacy Policy</h1>
-            <p className="text-[#8A7F72] text-sm">Last updated: 7 May 2026</p>
+            <p className="text-[#8A7F72] text-sm">Last updated: 20 August 2026</p>
           </div>
 
           <Section title="Overview">
@@ -91,6 +91,10 @@ export default function PrivacyPage() {
               your account, and present your activity history in a meaningful way.
             </p>
             <p>We do not use your data for advertising, profiling, or any purpose beyond providing the trail-tracking service.</p>
+            <p>
+              We do not use your Strava data to train, develop, evaluate, or operate any
+              artificial intelligence or machine learning models.
+            </p>
           </Section>
 
           <Section title="Legal basis for processing">
@@ -101,8 +105,8 @@ export default function PrivacyPage() {
             </p>
             <p>
               You can withdraw consent at any time by disconnecting My Trail Log from your Strava account
-              in <a href="https://www.strava.com/settings/apps" target="_blank" rel="noopener noreferrer" className="text-[#C4652A] underline hover:no-underline">Strava&apos;s connected apps settings</a> and
-              requesting deletion of your data (see below).
+              in <a href="https://www.strava.com/settings/apps" target="_blank" rel="noopener noreferrer" className="text-[#C4652A] underline hover:no-underline">Strava&apos;s connected apps settings</a>,
+              which deletes your data immediately and automatically (see below) — no separate request needed.
             </p>
           </Section>
 
@@ -113,7 +117,19 @@ export default function PrivacyPage() {
               may delete your account and associated data.
             </p>
             <p>
-              Following a deletion request, your data will be removed from our systems within 30 days.
+              If you revoke My Trail Log&apos;s access in{" "}
+              <a href="https://www.strava.com/settings/apps" target="_blank" rel="noopener noreferrer" className="text-[#C4652A] underline hover:no-underline">
+                Strava&apos;s connected apps settings
+              </a>{" "}
+              — or use the <span className="font-medium text-[#2C2520]">Disconnect &amp; Delete My Data</span> button
+              in the app — your data is deleted <span className="font-medium text-[#2C2520]">immediately and automatically</span>.
+              There is no waiting period and no separate request needed for this path.
+            </p>
+            <p>
+              If you instead request deletion by emailing us (see below), we will complete that
+              within 30 days.
+            </p>
+            <p>
               Anonymised, aggregate statistics (e.g. total number of users who have walked the Pennine Way)
               that cannot be linked to any individual may be retained indefinitely.
             </p>
@@ -164,15 +180,22 @@ export default function PrivacyPage() {
 
           <Section title="Requesting deletion">
             <p>
-              To delete your account and all associated data, email us at{" "}
+              The fastest way to delete your data is to disconnect My Trail Log via{" "}
+              <a href="https://www.strava.com/settings/apps" target="_blank" rel="noopener noreferrer" className="text-[#C4652A] underline hover:no-underline">
+                Strava&apos;s connected apps settings
+              </a>{" "}
+              or the <span className="font-medium text-[#2C2520]">Disconnect &amp; Delete My Data</span> button in
+              the app — this deletes your data immediately and automatically, with nothing further to do.
+            </p>
+            <p>
+              If you&apos;d rather request deletion directly (for example, if you no longer have
+              access to your Strava account), email us at{" "}
               <a href="mailto:mytrailloguk@gmail.com" className="text-[#C4652A] underline hover:no-underline">
                 mytrailloguk@gmail.com
               </a>{" "}
               with the subject line <span className="font-medium text-[#2C2520]">Delete my account</span> and
-              include your Strava username or email address so we can identify your account.
-            </p>
-            <p>
-              We will confirm receipt within 5 working days and complete deletion within 30 days.
+              include your Strava username or email address so we can identify your account. We will
+              confirm receipt within 5 working days and complete deletion within 30 days.
             </p>
           </Section>
 

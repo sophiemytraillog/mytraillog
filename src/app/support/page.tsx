@@ -96,17 +96,21 @@ export default function SupportPage() {
 
             <Faq question="How do I delete my account and data?">
               <p>
-                Email us at{" "}
+                The fastest way is to disconnect My Trail Log via your{" "}
+                <a href="https://www.strava.com/settings/apps" target="_blank" rel="noopener noreferrer" className="text-[#C4652A] underline hover:no-underline">
+                  Strava connected apps settings
+                </a>{" "}
+                or the <span className="font-medium text-[#2C2520]">Disconnect &amp; Delete My Data</span> button
+                in the app — either one deletes all your data immediately and automatically, no email required.
+              </p>
+              <p className="mt-2">
+                Alternatively, email us at{" "}
                 <a href="mailto:mytrailloguk@gmail.com" className="text-[#C4652A] underline hover:no-underline">
                   mytrailloguk@gmail.com
                 </a>{" "}
                 with the subject line <span className="font-medium text-[#2C2520]">Delete my account</span> and include
                 your Strava username so we can identify your account. We will confirm receipt within 5 working days
-                and delete all your data within 30 days. You can also disconnect My Trail Log from Strava at any time
-                via your{" "}
-                <a href="https://www.strava.com/settings/apps" target="_blank" rel="noopener noreferrer" className="text-[#C4652A] underline hover:no-underline">
-                  Strava connected apps settings
-                </a>.
+                and delete all your data within 30 days.
               </p>
             </Faq>
 
