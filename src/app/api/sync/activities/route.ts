@@ -5,6 +5,7 @@ import { runSyncChunk, finishSync } from "@/lib/sync-engine";
 import { pool } from "@/lib/db";
 import { logSyncEvent } from "@/lib/sync-log";
 import { triggerMatchChain } from "@/lib/match-chain";
+import { triggerDescriptionChain } from "@/lib/description-chain";
 
 export const dynamic = "force-dynamic";
 // Vercel Hobby plan hard-caps function duration at 60s — this cannot be
@@ -115,6 +116,10 @@ export async function GET(request: NextRequest) {
           // than only ever resuming when the user happens to have new
           // activities to sync.
           waitUntil(triggerMatchChain(userId, origin));
+          // Same idea for the description backlog — a previous sync/webhook
+          // could have left activities with confirmed trail matches but no
+          // description written (see description-chain.ts).
+          waitUntil(triggerDescriptionChain(userId, origin, "sync"));
           return;
         }
 
@@ -168,6 +173,10 @@ export async function GET(request: NextRequest) {
         // Strava webhook's handleNewActivity — closing this tab right now
         // doesn't stop it.
         waitUntil(triggerMatchChain(userId, origin));
+        // Trail matching that lands here (or later, as the chain above
+        // continues) can make activities newly eligible for a description
+        // write — catch those up in the background too, same pattern.
+        waitUntil(triggerDescriptionChain(userId, origin, "sync"));
       } catch (err) {
         const message = err instanceof Error ? err.message : "An unexpected error occurred";
         console.error("[sync/activities] Fatal error:", err);

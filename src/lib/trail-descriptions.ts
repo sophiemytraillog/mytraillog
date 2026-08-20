@@ -341,6 +341,203 @@ export async function writeTrailDescription(
   return true;
 }
 
+// ── Shared batch processor ──────────────────────────────────────────────────
+//
+// Strava's rate limit is enforced per-application across every user combined
+// — this backlog scan is the one feature that can burn through it fastest,
+// so it gets its own fixed daily share rather than competing with normal
+// syncs/webhooks for whatever's left. 250 updates/day ≈ 500 calls/day
+// (GET+PUT per update), leaving the remaining ~1,500 of the app's ~2,000/day
+// quota free for everything else.
+const DAILY_UPDATE_BUDGET = 250;
+
+// Reserves one attempt against the app-wide daily backfill budget, paced
+// evenly across the day (via an elapsed-fraction ceiling) rather than
+// spendable in one burst. Atomic: the conditional UPDATE means concurrent
+// callers — the manual button, the background chain, and the cron sweep can
+// all be reserving slots at once — can't collectively reserve past the
+// ceiling.
+export async function reserveBackfillSlot(): Promise<boolean> {
+  const now = new Date();
+  const startOfDayUTC = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const fractionOfDayElapsed = (now.getTime() - startOfDayUTC) / (24 * 60 * 60 * 1000);
+  const allowedSoFar = Math.max(1, Math.floor(DAILY_UPDATE_BUDGET * fractionOfDayElapsed));
+
+  const { rows } = await pool.query<{ calls_used: number }>(
+    `INSERT INTO backfill_api_usage (usage_date, calls_used) VALUES (CURRENT_DATE, 1)
+     ON CONFLICT (usage_date) DO UPDATE
+       SET calls_used = backfill_api_usage.calls_used + 1
+       WHERE backfill_api_usage.calls_used < $1
+     RETURNING calls_used`,
+    [allowedSoFar]
+  );
+  return rows.length > 0;
+}
+
+// Sliding-window rate limiter: tracks each Strava API call and blocks until
+// there is budget remaining in the current 15-minute window. Per-invocation
+// only, doesn't persist across separate function calls — reserveBackfillSlot's
+// DB row is what actually enforces the shared daily cap across every caller;
+// this is just a courtesy throttle within a single batch.
+export class RateLimiter {
+  private readonly windowMs = 15 * 60 * 1000;
+  private readonly maxRequests: number;
+  private timestamps: number[] = [];
+
+  constructor(maxRequests: number) {
+    this.maxRequests = maxRequests;
+  }
+
+  async waitForSlot(): Promise<void> {
+    for (;;) {
+      const now = Date.now();
+      this.timestamps = this.timestamps.filter((t) => now - t < this.windowMs);
+      if (this.timestamps.length < this.maxRequests) {
+        this.timestamps.push(now);
+        return;
+      }
+      const waitMs = this.windowMs - (now - this.timestamps[0]) + 50;
+      await new Promise<void>((r) => setTimeout(r, waitMs));
+    }
+  }
+
+  // Returns ms until n slots are available (0 = capacity available now).
+  msUntilCapacity(n = 1): number {
+    const now = Date.now();
+    this.timestamps = this.timestamps.filter((t) => now - t < this.windowMs);
+    if (this.timestamps.length + n <= this.maxRequests) return 0;
+    return this.windowMs - (now - this.timestamps[0]) + 50;
+  }
+}
+
+export interface DescriptionBatchResult {
+  checkedThisBatch: number;
+  updatedThisBatch: number;
+  errorsThisBatch: number;
+  remaining: number;
+  done: boolean;
+  budgetExhausted: boolean;
+}
+
+// One bounded batch of the description backlog for a single user — same
+// discovery query and per-activity handling as the manual "Update historical
+// activity descriptions" button (/api/update-descriptions), factored out
+// here so that route, the automatic background chain (description-chain.ts),
+// and the daily cron sweep all share one implementation instead of three
+// copies of the budget/rate-limit/retry logic drifting apart.
+//
+// Logs one aggregated sync_log event per call — deliberately not one per
+// write, which could be up to 250/day — so "is this actually running" is a
+// queryable fact instead of the console-only blind spot this backlog used to
+// be stuck with (root-caused 2026-08-20: activities sat with confirmed trail
+// matches for days because nothing but a manual button ever wrote their
+// descriptions, and there was no durable record of that ever happening).
+export async function processDescriptionBatch(
+  userId: string,
+  timeBudgetMs: number,
+  triggeredBy: string
+): Promise<DescriptionBatchResult> {
+  const startedAt = Date.now();
+
+  const { rows: [userPrefs] } = await pool.query<{
+    strava_description_updates: boolean;
+    description_mode: DescriptionMode;
+  }>(
+    "SELECT strava_description_updates, description_mode FROM users WHERE id = $1",
+    [userId]
+  );
+  if (!userPrefs?.strava_description_updates) {
+    return { checkedThisBatch: 0, updatedThisBatch: 0, errorsThisBatch: 0, remaining: 0, done: true, budgetExhausted: false };
+  }
+  const mode: DescriptionMode = userPrefs.description_mode ?? "full";
+
+  const { rows: activities } = await pool.query<{ id: string; strava_activity_id: string; name: string }>(
+    `SELECT DISTINCT a.id, a.strava_activity_id, a.name
+     FROM activities a
+     JOIN activity_trail_matches atm ON atm.activity_id = a.id
+     WHERE a.user_id = $1 AND a.strava_description_updated = FALSE
+     ORDER BY a.strava_activity_id ASC`,
+    [userId]
+  );
+
+  const limiter = new RateLimiter(100);
+  let checkedThisBatch = 0;
+  let updatedThisBatch = 0;
+  let errorsThisBatch = 0;
+  let budgetExhausted = false;
+
+  for (let i = 0; i < activities.length; i++) {
+    if (Date.now() - startedAt > timeBudgetMs) break;
+
+    // Strava rate limit reached this run — stop cleanly, a later call
+    // (chain hop, cron, or the manual button) resumes from here.
+    if (limiter.msUntilCapacity(2) > 0) break;
+
+    const act = activities[i];
+    checkedThisBatch++;
+
+    try {
+      const matches = await getActivityTrailMatches(userId, act.id);
+
+      // Ambiguous — could be a false-positive candidate (the loose
+      // backfill-candidate insert) or matching genuinely hasn't landed a
+      // confirmed progress row yet. Leave unchecked either way so a later
+      // call can pick it back up once it's real.
+      if (matches.length === 0) continue;
+
+      const relevantMatches = mode === "full" ? matches : matches.filter((m) => m.new_trail_distance_m > 0);
+      if (relevantMatches.length === 0) {
+        await pool.query(
+          "UPDATE activities SET strava_description_updated = TRUE WHERE id = $1",
+          [act.id]
+        ).catch(() => {});
+        continue;
+      }
+
+      if (!(await reserveBackfillSlot())) {
+        budgetExhausted = true;
+        break;
+      }
+
+      const wasUpdated = await writeTrailDescription(
+        userId, act.id, parseInt(act.strava_activity_id), matches, mode, 0, limiter
+      );
+      if (wasUpdated) updatedThisBatch++;
+    } catch (err) {
+      if (err instanceof StravaRateLimitError) break;
+
+      errorsThisBatch++;
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[description-batch] Activity ${act.id}:`, message);
+
+      if (err instanceof ScopeError) break;
+
+      const { giveUp } = await recordDescriptionUpdateFailure(userId, act.id).catch(() => ({ giveUp: false }));
+      if (giveUp) {
+        await pool.query(
+          "UPDATE activities SET strava_description_updated = TRUE WHERE id = $1",
+          [act.id]
+        ).catch(() => {});
+      }
+    }
+  }
+
+  const remaining = activities.length - checkedThisBatch;
+  const done = checkedThisBatch >= activities.length;
+
+  logSyncEvent(userId, "description_batch", {
+    triggeredBy,
+    checkedThisBatch,
+    updatedThisBatch,
+    errorsThisBatch,
+    remaining,
+    done,
+    budgetExhausted,
+  });
+
+  return { checkedThisBatch, updatedThisBatch, errorsThisBatch, remaining, done, budgetExhausted };
+}
+
 export class ScopeError extends Error {
   readonly isScopeError = true;
 }

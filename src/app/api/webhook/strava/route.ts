@@ -15,6 +15,7 @@ import {
   ScopeError,
   type DescriptionMode,
 } from "@/lib/trail-descriptions";
+import { triggerDescriptionChain } from "@/lib/description-chain";
 
 // A single trail's match computation can legitimately take well over a
 // minute for an active user — ST_Union over hundreds/thousands of nearby
@@ -96,10 +97,12 @@ export async function POST(req: Request) {
 
   console.log("[webhook/strava] Event:", JSON.stringify(event));
 
+  const origin = new URL(req.url).origin;
+
   if (event.object_type === "athlete" && event.aspect_type === "delete") {
     await handleDeauth(event.object_id);
   } else if (event.object_type === "activity" && event.aspect_type === "create") {
-    waitUntil(handleNewActivity(event.object_id, event.owner_id));
+    waitUntil(handleNewActivity(event.object_id, event.owner_id, origin));
   } else if (event.object_type === "activity" && event.aspect_type === "delete") {
     waitUntil(handleDeletedActivity(event.object_id, event.owner_id));
   } else if (event.object_type === "activity" && event.aspect_type === "update") {
@@ -237,7 +240,7 @@ async function handleUpdatedActivity(activityId: number, stravaAthleteId: number
 // ── New activity ───────────────────────────────────────────────────────────────
 // Fetches the full activity from Strava (needed for the polyline), stores it,
 // then runs trail matching for the user.
-async function handleNewActivity(activityId: number, stravaAthleteId: number) {
+async function handleNewActivity(activityId: number, stravaAthleteId: number, origin: string) {
   console.log(
     `[webhook/strava] New activity ${activityId} for athlete ${stravaAthleteId}`
   );
@@ -424,6 +427,17 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number) {
             }
           });
       }
+    }
+
+    // Catches exactly the case the comment above describes: matching timed
+    // out here, so the inline write above was skipped — and anything else
+    // already pending for this user (from an earlier sync/webhook call that
+    // hit the same timeout) that nothing has come back to retry. Fires
+    // unconditionally whenever descriptions are wanted, not just on
+    // timeout, since it's a cheap no-op when there's genuinely nothing
+    // pending (see processDescriptionBatch's discovery query).
+    if (wantsDescriptionUpdate) {
+      waitUntil(triggerDescriptionChain(user.id, origin, "webhook"));
     }
   } catch (err) {
     console.error(

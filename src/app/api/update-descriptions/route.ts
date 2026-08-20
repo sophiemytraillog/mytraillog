@@ -5,6 +5,8 @@ import {
   getActivityTrailMatches,
   writeTrailDescription,
   recordDescriptionUpdateFailure,
+  reserveBackfillSlot,
+  RateLimiter,
   ScopeError,
   StravaRateLimitError,
   type DescriptionMode,
@@ -22,70 +24,13 @@ export const maxDuration = 60;
 // stream close within the 60s ceiling.
 const TIME_BUDGET_MS = 45_000;
 
-// Strava's rate limit is enforced per-application across every user combined
-// (see StravaRateLimitError) — this backlog scan is the one feature that can
-// burn through it fastest, so it gets its own fixed daily share rather than
-// competing with normal syncs/webhooks/new-activity processing for whatever's
-// left. 250 updates/day ≈ 500 calls/day (GET+PUT per update), leaving the
-// remaining ~1,500 of the app's ~2,000/day quota free for everything else.
-const DAILY_UPDATE_BUDGET = 250;
-
-// Reserves one attempt against the app-wide daily backfill budget, paced
-// evenly across the day (via an elapsed-fraction ceiling) rather than
-// spendable in one burst — otherwise the first user to click "Update
-// historical descriptions" each day could burn the whole thing in minutes.
-// Atomic: the conditional UPDATE means concurrent requests can't both
-// reserve past the ceiling.
-async function reserveBackfillSlot(): Promise<boolean> {
-  const now = new Date();
-  const startOfDayUTC = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  const fractionOfDayElapsed = (now.getTime() - startOfDayUTC) / (24 * 60 * 60 * 1000);
-  const allowedSoFar = Math.max(1, Math.floor(DAILY_UPDATE_BUDGET * fractionOfDayElapsed));
-
-  const { rows } = await pool.query<{ calls_used: number }>(
-    `INSERT INTO backfill_api_usage (usage_date, calls_used) VALUES (CURRENT_DATE, 1)
-     ON CONFLICT (usage_date) DO UPDATE
-       SET calls_used = backfill_api_usage.calls_used + 1
-       WHERE backfill_api_usage.calls_used < $1
-     RETURNING calls_used`,
-    [allowedSoFar]
-  );
-  return rows.length > 0;
-}
-
-// Sliding-window rate limiter: tracks each Strava API call and blocks until
-// there is budget remaining in the current 15-minute window.
-class RateLimiter {
-  private readonly windowMs = 15 * 60 * 1000;
-  private readonly maxRequests: number;
-  private timestamps: number[] = [];
-
-  constructor(maxRequests: number) {
-    this.maxRequests = maxRequests;
-  }
-
-  async waitForSlot(): Promise<void> {
-    for (;;) {
-      const now = Date.now();
-      this.timestamps = this.timestamps.filter((t) => now - t < this.windowMs);
-      if (this.timestamps.length < this.maxRequests) {
-        this.timestamps.push(now);
-        return;
-      }
-      // Wait until the oldest request falls out of the window
-      const waitMs = this.windowMs - (now - this.timestamps[0]) + 50;
-      await new Promise<void>((r) => setTimeout(r, waitMs));
-    }
-  }
-
-  // Returns ms until n slots are available (0 = capacity available now).
-  msUntilCapacity(n = 1): number {
-    const now = Date.now();
-    this.timestamps = this.timestamps.filter((t) => now - t < this.windowMs);
-    if (this.timestamps.length + n <= this.maxRequests) return 0;
-    return this.windowMs - (now - this.timestamps[0]) + 50;
-  }
-}
+// reserveBackfillSlot and RateLimiter live in trail-descriptions.ts now,
+// shared with the automatic background chain and the daily cron sweep — see
+// processDescriptionBatch there. This route keeps its own SSE-streaming loop
+// (per-activity progress events the manual "Update historical activity
+// descriptions" button needs) rather than calling that shared batch function
+// directly, but reserveBackfillSlot's DB row means the daily budget is still
+// correctly shared across every caller regardless.
 
 export async function GET(request: NextRequest) {
   const force = request.nextUrl.searchParams.get("force") === "true";

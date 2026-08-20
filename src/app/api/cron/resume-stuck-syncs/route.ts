@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { pool } from "@/lib/db";
 import { runSyncChunk, finishSync } from "@/lib/sync-engine";
 import { matchNextBatch } from "@/lib/match-trails";
+import { processDescriptionBatch } from "@/lib/trail-descriptions";
 import { logSyncEvent } from "@/lib/sync-log";
 
 export const dynamic = "force-dynamic";
@@ -42,6 +43,19 @@ const STALE_THRESHOLD_MINUTES = 3;
 // route, so this and a manual admin call never duplicate work or race.
 const MATCH_SWEEP_USERS_PER_RUN = 5;
 const MATCH_SWEEP_TRAILS_PER_USER = 30;
+
+// Third phase, same run: sweep the description-writing backlog. Root cause
+// this exists to fix (2026-08-20): handleNewActivity's inline write is
+// skipped whenever its own 20s matching budget times out, on the assumption
+// something would circle back once matching actually finished — nothing
+// did, since the only thing that ever finished the job (the "Update
+// historical activity descriptions" button) is manual. The primary path is
+// now the same waitUntil()-chained background job pattern as trail matching
+// (see description-chain.ts), triggered from the webhook and from sync
+// completion; this sweep is the once-a-day backstop for whatever a failed
+// chain dispatch or a stalled account still misses.
+const DESCRIPTION_SWEEP_TIME_BUDGET_MS = 55_000;
+const DESCRIPTION_SWEEP_USERS_PER_RUN = 5;
 
 export async function GET(request: NextRequest) {
   // Vercel sets this automatically when CRON_SECRET is configured in the
@@ -143,10 +157,58 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // Phase 3: description-writing backlog sweep. Only users who've actually
+  // opted in (strava_description_updates) and have at least one activity
+  // with a confirmed trail match still unwritten are candidates — the
+  // EXISTS below is cheap (index on activity_trail_matches.user_id) and
+  // avoids reading processDescriptionBatch's own discovery query for every
+  // user in the app just to find out most have nothing pending.
+  const descriptionResults: Array<{ userId: string; checkedThisRun: number; updatedThisRun: number; done: boolean }> = [];
+
+  if (Date.now() - startedAt < DESCRIPTION_SWEEP_TIME_BUDGET_MS) {
+    const { rows: pendingUsers } = await pool.query<{ id: string; first_name: string | null }>(
+      `SELECT u.id, u.first_name
+       FROM users u
+       WHERE u.strava_description_updates = TRUE
+         AND EXISTS (
+           SELECT 1 FROM activities a
+           JOIN activity_trail_matches atm ON atm.activity_id = a.id
+           WHERE a.user_id = u.id AND a.strava_description_updated = FALSE
+         )
+       ORDER BY u.last_synced_at ASC
+       LIMIT ${DESCRIPTION_SWEEP_USERS_PER_RUN}`
+    );
+
+    for (const user of pendingUsers) {
+      const remainingBudget = DESCRIPTION_SWEEP_TIME_BUDGET_MS - (Date.now() - startedAt);
+      if (remainingBudget <= 0) {
+        console.log(`[cron/resume-stuck-syncs] Description-sweep budget reached — ${pendingUsers.length - descriptionResults.length} user(s) deferred to next run`);
+        break;
+      }
+
+      const result = await processDescriptionBatch(user.id, remainingBudget, "cron");
+
+      console.log(`[cron/resume-stuck-syncs] description sweep — ${user.first_name ?? user.id}: checked ${result.checkedThisBatch}, updated ${result.updatedThisBatch}, done=${result.done}`);
+
+      descriptionResults.push({
+        userId: user.id,
+        checkedThisRun: result.checkedThisBatch,
+        updatedThisRun: result.updatedThisBatch,
+        done: result.done,
+      });
+
+      if (result.budgetExhausted) {
+        console.log("[cron/resume-stuck-syncs] Daily description budget exhausted — stopping sweep for today");
+        break;
+      }
+    }
+  }
+
   return NextResponse.json({
     staleUsersFound: staleUsers.length,
     processed: results.length,
     results,
     matchSweep: matchResults,
+    descriptionSweep: descriptionResults,
   });
 }
