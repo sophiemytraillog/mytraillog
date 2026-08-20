@@ -76,15 +76,19 @@ export async function GET(request: NextRequest) {
         // of re-running spatial queries against every matched trail on every
         // request. That recompute used to take 5+ minutes for power users and
         // blew Vercel's 60s cap before a single description could be written.
-        // Oldest first — so each run makes progress on historical backfill
-        // rather than re-checking recent activities that are already updated.
+        // Newest first, same as processDescriptionBatch's automatic chain —
+        // kept consistent with that query rather than leaving this route as a
+        // second, differently-ordered copy of the same backlog scan. Was
+        // oldest-first; a user clicking this and expecting their most recent
+        // activity to be covered shouldn't have to wait behind years of
+        // untouched history first.
         const { rows: activities } = await pool.query<{ id: string; strava_activity_id: string; name: string }>(
           `SELECT DISTINCT a.id, a.strava_activity_id, a.name
            FROM activities a
            JOIN activity_trail_matches atm ON atm.activity_id = a.id
            WHERE a.user_id = $1
              AND ($2 OR a.strava_description_updated = FALSE)
-           ORDER BY a.strava_activity_id ASC`,
+           ORDER BY a.strava_activity_id DESC`,
           [userId, force]
         );
 

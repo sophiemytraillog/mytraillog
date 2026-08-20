@@ -451,12 +451,22 @@ export async function processDescriptionBatch(
   }
   const mode: DescriptionMode = userPrefs.description_mode ?? "full";
 
+  // Newest first — the activity that just triggered this call (a fresh
+  // webhook delivery or sync) needs its description written within
+  // minutes, not queued behind however much historical backlog exists.
+  // Previously oldest-first: reasonable for the manual backlog button in
+  // isolation, but once the SAME query started driving the automatic
+  // real-time chain too, a large historical backlog (Sophie: ~1,957
+  // pending) meant this week's activities sat at the back of the queue
+  // behind years of old ones. Newest-first fixes both: recent activities
+  // get written almost immediately, and the historical backlog still
+  // drains in the background behind them, just no longer blocking them.
   const { rows: activities } = await pool.query<{ id: string; strava_activity_id: string; name: string }>(
     `SELECT DISTINCT a.id, a.strava_activity_id, a.name
      FROM activities a
      JOIN activity_trail_matches atm ON atm.activity_id = a.id
      WHERE a.user_id = $1 AND a.strava_description_updated = FALSE
-     ORDER BY a.strava_activity_id ASC`,
+     ORDER BY a.strava_activity_id DESC`,
     [userId]
   );
 
