@@ -168,6 +168,13 @@ export default async function TrailDetailPage({
         </Link>
         <span className="text-[#8A7F72]/50">·</span>
         <span className="text-[#2C2520] text-sm font-medium truncate">{trail.name}</span>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/strava/api_logo_pwrdBy_strava_horiz_orange.svg"
+          alt="Powered by Strava"
+          className="ml-auto shrink-0"
+          style={{ height: "20px", width: "auto" }}
+        />
       </nav>
 
       <div className="flex-1 px-5 pb-12 max-w-2xl mx-auto w-full">
@@ -203,12 +210,6 @@ export default async function TrailDetailPage({
           <Link href="/dashboard" className="text-xs text-[#8A7F72] hover:text-[#2C2520] transition-colors">
             My Trail Log
           </Link>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/strava/api_logo_pwrdBy_strava_horiz_orange.svg"
-            alt="Powered by Strava"
-            style={{ height: "20px", width: "auto" }}
-          />
           <div className="flex items-center gap-4 text-[#8A7F72]/60 text-xs">
             <Link href="/privacy" className="hover:text-[#8A7F72] transition-colors">Privacy</Link>
             <Link href="/terms" className="hover:text-[#8A7F72] transition-colors">Terms</Link>
