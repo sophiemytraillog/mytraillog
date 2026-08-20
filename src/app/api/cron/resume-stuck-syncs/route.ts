@@ -91,13 +91,16 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Phase 2: safety net for sync-engine's deferred trail matches, for users
-  // whose sync completed but who never reopened the dashboard — the primary
-  // recovery path is now TrailMatchProgress auto-continuing client-side
-  // (see DashboardClient), same "fast path is client-driven, cron is the
-  // once-a-day fallback for users who never come back" split as phase 1.
-  // Bounded to a handful of users per run so the backlog drains fairly
-  // across days rather than one account eating the whole time budget.
+  // Phase 2: safety net for sync-engine's deferred trail matches. The
+  // primary path is now the server-side waitUntil()-chained background job
+  // (see match-chain.ts), triggered from /api/sync/activities on sync
+  // completion and from dashboard/page.tsx on any visit with leftover
+  // matching — neither depends on the browser staying open. This sweep is
+  // the once-a-day backstop for whatever that still misses: a chain that
+  // fails to dispatch its next hop, a deploy restarting mid-chain, or an
+  // account that hasn't synced or opened the dashboard since a chain last
+  // stalled. Bounded to a handful of users per run so the backlog drains
+  // fairly across days rather than one account eating the whole time budget.
   const matchResults: Array<{ userId: string; checkedThisRun: number; matchedThisRun: number; done: boolean }> = [];
 
   if (Date.now() - startedAt < TOTAL_TIME_BUDGET_MS) {

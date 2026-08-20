@@ -1,7 +1,9 @@
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { waitUntil } from "@vercel/functions";
 import { query } from "@/lib/db";
 import { getMatchProgress } from "@/lib/match-trails";
+import { triggerMatchChain } from "@/lib/match-chain";
 import DashboardClient, { type TrailRow } from "./DashboardClient";
 
 interface Athlete {
@@ -152,6 +154,20 @@ export default async function Dashboard({
       matchProgress = await getMatchProgress(userId);
     } catch (err) {
       console.error("[dashboard] Failed to load match progress:", err);
+    }
+
+    // Covers the account that finished syncing in an earlier session but
+    // never got all the way through the trail catalog (finishSync's inline
+    // pass is capped — see MAX_TRAILS_PER_FINISH_SYNC) — /api/sync/activities
+    // only fires this chain when an actual sync just ran, so a user who
+    // just opens the dashboard with leftover matching from before needs
+    // this trigger too. Harmless if a chain is already running (matchNextBatch's
+    // upserts are idempotent) or already done (an immediate no-op).
+    if (matchProgress.totalChecked < matchProgress.totalTrails) {
+      const h = headers();
+      const host = h.get("host") ?? "localhost:3000";
+      const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
+      waitUntil(triggerMatchChain(userId, `${proto}://${host}`));
     }
   }
 

@@ -1,8 +1,10 @@
 import { NextRequest } from "next/server";
 import { cookies } from "next/headers";
+import { waitUntil } from "@vercel/functions";
 import { runSyncChunk, finishSync } from "@/lib/sync-engine";
 import { pool } from "@/lib/db";
 import { logSyncEvent } from "@/lib/sync-log";
+import { triggerMatchChain } from "@/lib/match-chain";
 
 export const dynamic = "force-dynamic";
 // Vercel Hobby plan hard-caps function duration at 60s — this cannot be
@@ -22,6 +24,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  const origin = new URL(request.url).origin;
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
@@ -105,6 +108,13 @@ export async function GET(request: NextRequest) {
             message: "Sync complete — already up to date",
           });
           send("matched", { matchedTrails: 0, message: "Sync complete — already up to date" });
+          // Nothing new to match from THIS sync, but a previous sync could
+          // still have left deferred trails unchecked (finishSync's own
+          // inline pass is capped — see MAX_TRAILS_PER_FINISH_SYNC) — catch
+          // those up now via the same background chain as below, rather
+          // than only ever resuming when the user happens to have new
+          // activities to sync.
+          waitUntil(triggerMatchChain(userId, origin));
           return;
         }
 
@@ -148,6 +158,16 @@ export async function GET(request: NextRequest) {
           matchedTrails,
           message: "Trail progress updated",
         });
+
+        // finishSync's own inline pass just matched the first
+        // MAX_TRAILS_PER_FINISH_SYNC trails nearby this sync's activities —
+        // continue through whatever's left of the full ~1,181-trail catalog
+        // in the background, independent of this connection. waitUntil()
+        // keeps this request's function invocation alive long enough to
+        // dispatch (not run) the first chained hop, same pattern as the
+        // Strava webhook's handleNewActivity — closing this tab right now
+        // doesn't stop it.
+        waitUntil(triggerMatchChain(userId, origin));
       } catch (err) {
         const message = err instanceof Error ? err.message : "An unexpected error occurred";
         console.error("[sync/activities] Fatal error:", err);

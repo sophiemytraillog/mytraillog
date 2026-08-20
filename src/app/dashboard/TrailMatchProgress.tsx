@@ -2,22 +2,23 @@
 
 import { useEffect, useState } from "react";
 
-interface MatchBatchResponse {
-  checkedThisBatch: number;
+interface MatchProgressResponse {
   totalChecked: number;
   totalTrails: number;
   done: boolean;
 }
 
-// Client-driven continuation of finishSync's own capped inline matching
-// (see sync-engine.ts's MAX_TRAILS_PER_FINISH_SYNC) — a new or actively
-// syncing account only gets its first ~40 nearby trails checked inline;
-// this component keeps calling /api/sync/match-trails in a loop, right
-// here in the dashboard, until every trail's been checked, instead of
-// leaving the rest for tomorrow's cron sweep or a human noticing.
+const POLL_INTERVAL_MS = 4_000;
+
+// Purely a display — the actual matching work runs server-side regardless
+// of whether this component (or the browser) is even open, via the
+// waitUntil()-chained background job triggered from /api/sync/activities
+// and dashboard/page.tsx (see match-chain.ts). This just polls the
+// read-only /api/sync/match-progress endpoint to show "Matching trails: X
+// of Y checked" while that's happening, and stops polling once done.
 //
 // Remounted (see DashboardClient's key={lastSyncedAt}) after every sync
-// completes, so it always restarts from whatever the server just reported
+// completes, so it always starts from whatever the server just reported
 // rather than a stale in-memory count.
 export default function TrailMatchProgress({
   initialChecked,
@@ -34,43 +35,35 @@ export default function TrailMatchProgress({
     if (initialChecked >= initialTotal) return;
 
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
 
-    const run = async () => {
-      while (!cancelled) {
-        try {
-          const res = await fetch("/api/sync/match-trails");
-          if (!res.ok) throw new Error(`match-trails ${res.status}`);
-          const data: MatchBatchResponse = await res.json();
-          if (cancelled) return;
+    const poll = async () => {
+      try {
+        const res = await fetch("/api/sync/match-progress");
+        if (!res.ok) throw new Error(`match-progress ${res.status}`);
+        const data: MatchProgressResponse = await res.json();
+        if (cancelled) return;
 
-          setChecked(data.totalChecked);
-          setTotal(data.totalTrails);
-          if (data.done) return;
+        setChecked(data.totalChecked);
+        setTotal(data.totalTrails);
+        if (data.done) return;
 
-          // A batch that checked nothing (every trail in it failed all its
-          // retries) would otherwise spin the loop as fast as the network
-          // allows — pause before the next attempt instead of hammering it.
-          if (data.checkedThisBatch === 0) {
-            await new Promise((r) => setTimeout(r, 5_000));
-          }
-        } catch {
-          if (!cancelled) setFailed(true);
-          return;
-        }
+        timer = setTimeout(poll, POLL_INTERVAL_MS);
+      } catch {
+        if (!cancelled) setFailed(true);
       }
     };
 
-    run();
+    timer = setTimeout(poll, POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
     // Intentionally only on mount — a fresh mount (via the key prop in
     // DashboardClient) is how this restarts after a new sync.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Nothing left to check, or the loop gave up — the daily cron sweep is
-  // the fallback either way, no need to keep this visible.
   if (checked >= total || failed || total === 0) return null;
 
   const pct = Math.min((checked / total) * 100, 100);
