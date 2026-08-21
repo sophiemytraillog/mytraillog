@@ -2,6 +2,7 @@ import { pool } from "@/lib/db";
 import { getValidAccessToken } from "@/lib/strava";
 import { formatDist, unitLabel, type DistanceUnit } from "@/lib/distance";
 import { logSyncEvent } from "@/lib/sync-log";
+import { computeNewGroundExcludingActivity } from "@/lib/match-trails";
 
 // Matches the "3 attempts" convention already used elsewhere for transient
 // failures (see match-trails.ts) — enough to ride out a genuine blip, not so
@@ -104,23 +105,27 @@ export interface TrailMatch extends TrailMatchRow {
  * completion for trails with a manual fill.
  *
  * new_trail_distance_m ("how much of the trail did THIS activity add that
- * nothing earlier had") is NOT computed here via geometry — an earlier
- * version tried ST_Union-ing every one of a user's prior activities near a
- * trail per matched-activity call, and confirmed directly against
- * production (Sophie's account, Greenwich Meridian Trail) that it can run
- * for minutes and starve the connection pool. computeTrailProgress already
- * does that expensive union once, as part of normal matching, so we reuse
- * ITS output instead of redoing it: newGroundByTrailId is a
- * before/after-snapshot of user_trail_progress.completed_distance built by
- * the caller around its (already-happening) computeTrailProgress call — see
- * snapshotTrailProgress in match-trails.ts. Falls back to this activity's
- * own raw trail overlap (activity_trail_distance_m, cheap — a single
- * intersection, no cross-activity union) when no snapshot is available,
- * which is the case for the historical backfill catch-up
- * (update-descriptions route) processing activities matched long before
- * this feature existed — an approximation (assumes the whole activity is
- * new ground, overcounting on a repeated route) rather than the real thing,
- * but bounded and cheap, unlike the geometric approach.
+ * nothing earlier had") is cheapest when a before/after snapshot is
+ * available: newGroundByTrailId is a snapshot of
+ * user_trail_progress.completed_distance the caller took immediately
+ * around its own (already-happening) computeTrailProgress call — see
+ * snapshotTrailProgress in match-trails.ts — reusing computeTrailProgress's
+ * own union instead of redoing it. Only meaningful when matching and
+ * writing happen in the same call, with a well-defined "before" (webhook,
+ * finishSync).
+ *
+ * When no snapshot is available — the deferred path: the automatic
+ * description chain, the daily drain, the cron sweep, the manual "Update
+ * historical activity descriptions" button, anywhere matching already
+ * finished at some earlier point — falls back to
+ * computeNewGroundExcludingActivity, a real (if more expensive) geometric
+ * computation, NOT activity_trail_distance_m (this activity's raw overlap
+ * regardless of prior coverage). That used to be the fallback and was
+ * wrong every time after the first: root-caused via Dave Chase's second
+ * "already covered this" report, 2026-08-21 — an activity written through
+ * the new automatic chain reported 907.8m new on South Downs Way when his
+ * other 506 nearby activities had already covered that exact stretch, true
+ * new ground 0m.
  */
 export async function getActivityTrailMatches(
   userId: string,
@@ -167,10 +172,15 @@ export async function getActivityTrailMatches(
      ORDER BY completion_percentage DESC`,
     [activityDbId, userId, BUFFER_METRES]
   );
-  return rows.map((r) => ({
-    ...r,
-    new_trail_distance_m: newGroundByTrailId?.get(r.trail_id) ?? r.activity_trail_distance_m,
-  }));
+
+  const results: TrailMatch[] = [];
+  for (const r of rows) {
+    const newGround = newGroundByTrailId
+      ? (newGroundByTrailId.get(r.trail_id) ?? 0)
+      : await computeNewGroundExcludingActivity(userId, activityDbId, r.trail_id, r.completed_distance);
+    results.push({ ...r, new_trail_distance_m: newGround });
+  }
+  return results;
 }
 
 function getAppUrl(): string {

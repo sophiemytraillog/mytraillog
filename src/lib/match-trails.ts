@@ -117,6 +117,76 @@ export async function snapshotTrailProgress(
   return new Map(rows.map((r) => [r.trail_id, r.completed_distance]));
 }
 
+/**
+ * Isolates ONE activity's true unique contribution to a trail's coverage —
+ * used by trail-descriptions.ts's getActivityTrailMatches when no
+ * before/after snapshot is available (the deferred description-writing
+ * path: the automatic chain, the daily drain, the cron sweep, the manual
+ * "Update historical activity descriptions" button — anywhere matching
+ * already finished at some EARLIER point, not in the same call as the
+ * write). That fallback used to just report the activity's whole raw
+ * overlap with the trail as "new ground" — correct only the first time a
+ * route is ever run, wrong every time after. Root-caused via Dave Chase's
+ * second report, 2026-08-21: "Giving it some welly" was written through
+ * the new automatic chain and reported 907.8m new on South Downs Way; his
+ * other 506 activities near that trail already covered the exact same
+ * stretch, so the true new-ground contribution was 0m.
+ *
+ * Deliberately NOT a full re-run of MATCH_SQL's combined-buffer approach
+ * with this activity excluded then re-included (would be redoing the same
+ * multi-minute-for-a-busy-account computation getActivityTrailMatches was
+ * built to avoid in the first place) — this computes only ONE side
+ * (coverage from every OTHER activity near this trail) and subtracts it
+ * from the trail's already-known, already-cheap-to-read current
+ * completed_distance, rather than recomputing the "with this activity"
+ * side too. Still a real geometric union over however many other
+ * activities are nearby, so it's wrapped in the same statement_timeout
+ * safety net computeTrailProgress uses for expensive trails — a timeout or
+ * any other failure here returns 0 (safe: undercounts a genuinely-new
+ * stretch rather than repeating the original bug of overcounting old
+ * ground) instead of throwing and losing the whole description write.
+ */
+export async function computeNewGroundExcludingActivity(
+  userId: string,
+  activityId: string,
+  trailId: string,
+  currentCompletedDistanceM: number
+): Promise<number> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SET LOCAL statement_timeout = '20000'");
+    const { rows: [row] } = await client.query<{ covered_m: number }>(
+      `WITH combined_buffer AS (
+         SELECT ST_Union(ST_Buffer(a.geometry::geography, ${BUFFER_METRES})::geometry) AS geom
+         FROM (SELECT ST_SimplifyPreserveTopology(geometry, 0.001) AS geometry FROM trails WHERE id = $2) t_simplified
+         JOIN activities a
+           ON a.user_id = $1 AND a.id != $3 AND a.geometry IS NOT NULL
+           AND ST_DWithin(a.geometry::geography, t_simplified.geometry::geography, ${BUFFER_METRES + SIMPLIFY_MARGIN})
+       )
+       SELECT COALESCE(
+         ST_Length(ST_CollectionExtract(ST_Intersection(t.geometry, cb.geom), 2)::geography),
+         0
+       ) AS covered_m
+       FROM (SELECT geometry FROM trails WHERE id = $2) t
+       CROSS JOIN combined_buffer cb`,
+      [userId, trailId, activityId]
+    );
+    await client.query("COMMIT");
+    const coveredByOthers = row?.covered_m ?? 0;
+    return Math.max(0, currentCompletedDistanceM - coveredByOthers);
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error(
+      `[match-trails] computeNewGroundExcludingActivity failed for activity ${activityId}, trail ${trailId}:`,
+      err
+    );
+    return 0;
+  } finally {
+    client.release();
+  }
+}
+
 export async function computeTrailProgress(userId: string, trailIds?: string[]): Promise<number> {
   const { rows: [userPrefs] } = await pool.query<{ include_cycling: boolean }>(
     "SELECT include_cycling FROM users WHERE id = $1",
