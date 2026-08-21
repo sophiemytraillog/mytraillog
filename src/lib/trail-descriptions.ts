@@ -254,17 +254,22 @@ function buildTrailBlock(matches: TrailMatch[], unit: DistanceUnit, mode: Descri
 }
 
 /**
- * Appends (or refreshes) the My Trail Log block on a Strava activity.
+ * Appends, refreshes, or strips the My Trail Log block on a Strava activity.
  *
  * @param userId          Our DB user UUID
  * @param activityDbId    Our DB activity UUID
  * @param stravaActivityId Strava's numeric activity ID
  * @param matches         Pre-fetched trail matches (call getActivityTrailMatches first)
- * @param mode            'full' writes every matched trail; 'new_only'/'new_with_totals'
- *                        only write trails with new_trail_distance_m > NEW_GROUND_THRESHOLD_M
- *                        — with none, this returns false before making any Strava API calls at all.
+ * @param mode            'full' writes every matched trail. 'new_only'/'new_with_totals'
+ *                        only include trails with new_trail_distance_m > NEW_GROUND_THRESHOLD_M
+ *                        — if none qualify, any existing block is REMOVED entirely rather than
+ *                        left in place (a stale block from an earlier write, e.g. before this
+ *                        activity's new ground dropped below threshold or before a mode switch,
+ *                        must not linger forever just because there's nothing new to report now).
  * @param delayMs         Optional delay before making Strava API calls
- * @returns true if the description was updated, false if no changes were needed
+ * @returns true if the description was changed (written or stripped), false if it was already
+ *          correct as-is — either way, strava_description_updated is set on any normal return;
+ *          only a thrown error leaves it unset for a caller's own retry bookkeeping.
  */
 export async function writeTrailDescription(
   userId: string,
@@ -277,7 +282,6 @@ export async function writeTrailDescription(
 ): Promise<boolean> {
   const relevantMatches =
     mode === "full" ? matches : matches.filter((m) => m.new_trail_distance_m > NEW_GROUND_THRESHOLD_M);
-  if (relevantMatches.length === 0) return false;
 
   if (delayMs > 0) {
     await new Promise<void>((r) => setTimeout(r, delayMs));
@@ -286,6 +290,14 @@ export async function writeTrailDescription(
   const token = await getValidAccessToken(userId);
   const unit = await resolveDistanceUnit(userId);
 
+  // Always fetch the current description, even when relevantMatches is
+  // empty — that's the only way to know whether a stale block needs
+  // stripping. Previously this returned early right here, before any
+  // Strava call, whenever relevantMatches was empty; the cost of that
+  // shortcut was never noticing a block that needed removing (Dave Chase,
+  // 2026-08-21: new_only mode, an activity whose new ground had dropped to
+  // 0m under the NEW_GROUND_THRESHOLD_M fix still carried a full trail
+  // block, because nothing ever re-checked it once written).
   if (rateLimiter) await rateLimiter.waitForSlot();
   const getRes = await fetchStrava(
     `https://www.strava.com/api/v3/activities/${stravaActivityId}`,
@@ -327,12 +339,32 @@ export async function writeTrailDescription(
     )
     .replace(/[ \t]*(?:\r?\n){2,}/g, "\n\n")
     .trim();
-  const trailBlock = buildTrailBlock(relevantMatches, unit, mode);
-  // Exactly one blank line of separation when there's existing text to
-  // separate from; no leading blank lines at all when there isn't.
-  const newDesc = baseDesc ? `${baseDesc}\n\n${trailBlock}` : trailBlock;
 
-  if (newDesc === currentDesc.trimEnd()) return false;
+  // No relevant matches under this mode -> nothing to append; the block
+  // (if any existed) simply isn't rebuilt, so baseDesc IS the result.
+  const newDesc =
+    relevantMatches.length > 0
+      ? baseDesc
+        ? `${baseDesc}\n\n${buildTrailBlock(relevantMatches, unit, mode)}`
+        : buildTrailBlock(relevantMatches, unit, mode)
+      : baseDesc;
+
+  if (newDesc === currentDesc.trimEnd()) {
+    // Confirmed correct as-is — whether that's "has the right block" or
+    // "correctly has no block" — so this activity is genuinely done, not
+    // ambiguous. Checkpoint it here too, not just on the write path below:
+    // every caller used to skip calling this function entirely (and skip
+    // checkpointing) whenever it pre-computed zero relevant matches, which
+    // is exactly how a stale block was able to survive indefinitely — see
+    // the callers in sync-engine.ts, trail-descriptions.ts's
+    // processDescriptionBatch, and update-descriptions/route.ts, all of
+    // which now call this unconditionally instead of pre-filtering.
+    await pool.query(
+      `UPDATE activities SET strava_description_updated = TRUE WHERE id = $1`,
+      [activityDbId]
+    ).catch(() => {});
+    return false;
+  }
 
   if (rateLimiter) await rateLimiter.waitForSlot();
   const putRes = await fetchStrava(
@@ -361,7 +393,9 @@ export async function writeTrailDescription(
     [activityDbId]
   );
   console.log(
-    `[descriptions] Updated activity ${stravaActivityId}: ${relevantMatches.length} trail(s) (mode: ${mode}) — activityDbId ${activityDbId}`
+    relevantMatches.length > 0
+      ? `[descriptions] Updated activity ${stravaActivityId}: ${relevantMatches.length} trail(s) (mode: ${mode}) — activityDbId ${activityDbId}`
+      : `[descriptions] Stripped stale trail block from activity ${stravaActivityId} (mode: ${mode}, no relevant new ground) — activityDbId ${activityDbId}`
   );
   return true;
 }
@@ -524,20 +558,17 @@ export async function processDescriptionBatch(
       // call can pick it back up once it's real.
       if (matches.length === 0) continue;
 
-      const relevantMatches = mode === "full" ? matches : matches.filter((m) => m.new_trail_distance_m > NEW_GROUND_THRESHOLD_M);
-      if (relevantMatches.length === 0) {
-        await pool.query(
-          "UPDATE activities SET strava_description_updated = TRUE WHERE id = $1",
-          [act.id]
-        ).catch(() => {});
-        continue;
-      }
-
       if (!(await reserveBackfillSlot())) {
         budgetExhausted = true;
         break;
       }
 
+      // writeTrailDescription itself now decides whether a confirmed match
+      // with no relevant new ground (under new_only/new_with_totals) means
+      // stripping a stale block down to nothing, leaving it untouched, or
+      // writing a fresh one — and checkpoints strava_description_updated
+      // on any normal completion either way, so there's nothing left for
+      // this caller to pre-filter or branch on.
       const wasUpdated = await writeTrailDescription(
         userId, act.id, parseInt(act.strava_activity_id), matches, mode, 0, limiter
       );

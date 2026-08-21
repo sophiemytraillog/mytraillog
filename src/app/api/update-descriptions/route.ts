@@ -169,26 +169,6 @@ export async function GET(request: NextRequest) {
                 continue;
               }
 
-              // Past this point matches.length > 0 is a confirmed, real
-              // trail overlap. new_trail_distance_m here always comes from
-              // activity_trail_distance_m (no snapshot override in this
-              // backfill path) — a fixed geometric property of this
-              // activity, not a guess — so mode filtering finding nothing
-              // new is a deterministic, permanent fact, safe to close out.
-              // Without this, new_only/new_with_totals activities on an
-              // already-fully-covered route would get re-checked forever —
-              // the exact "stuck re-checking the same activities" bug this
-              // app hit once already (Rosie's backlog).
-              const relevantMatches = mode === "full" ? matches : matches.filter((m) => m.new_trail_distance_m > NEW_GROUND_THRESHOLD_M);
-              if (relevantMatches.length === 0) {
-                console.log(`[update-descriptions] Skipping ${i + 1}/${total} — confirmed no new ground: ${act.name}`);
-                await pool.query(
-                  "UPDATE activities SET strava_description_updated = TRUE WHERE id = $1",
-                  [act.id]
-                ).catch(() => {});
-                continue;
-              }
-
               // Only real Strava-calling attempts count against the daily
               // backfill budget — checking for a match above is DB-only.
               if (!(await reserveBackfillSlot())) {
@@ -216,11 +196,19 @@ export async function GET(request: NextRequest) {
 
               if (wasUpdated) {
                 updated++;
+                // wasUpdated now also covers "stripped a stale block down
+                // to nothing relevant" (mode filtering left zero trails),
+                // not just "wrote N trails" — recompute here purely for
+                // this progress message, same filter writeTrailDescription
+                // applies internally.
+                const relevantCount = (mode === "full" ? matches : matches.filter((m) => m.new_trail_distance_m > NEW_GROUND_THRESHOLD_M)).length;
                 send("progress", {
                   current: i + 1,
                   total,
                   updated,
-                  message: `Updated: ${act.name} (${relevantMatches.length} trail${relevantMatches.length !== 1 ? "s" : ""})`,
+                  message: relevantCount > 0
+                    ? `Updated: ${act.name} (${relevantCount} trail${relevantCount !== 1 ? "s" : ""})`
+                    : `Cleared stale trail info: ${act.name}`,
                 });
               }
             } catch (err) {

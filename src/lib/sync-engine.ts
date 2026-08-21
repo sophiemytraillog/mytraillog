@@ -12,7 +12,6 @@ import {
   recordDescriptionUpdateFailure,
   ScopeError,
   StravaRateLimitError,
-  NEW_GROUND_THRESHOLD_M,
   type DescriptionMode,
 } from "@/lib/trail-descriptions";
 import { logSyncEvent } from "@/lib/sync-log";
@@ -424,21 +423,14 @@ export async function finishSync(
         // has actually finished.
         if (matches.length === 0) continue;
 
-        // Past this point matches.length > 0 is a confirmed, real trail
-        // overlap — mode filtering deciding there's nothing new to write is
-        // a deterministic fact about this activity (new_trail_distance_m
-        // comes from this batch's own just-computed snapshot delta, not a
-        // guess), safe to close out permanently. Without this, new_only/
-        // new_with_totals activities on an already-fully-covered route
-        // would get re-checked forever — the exact "stuck re-checking the
-        // same activities" bug this app hit once already (Rosie's backlog).
-        const relevantMatches = mode === "full" ? matches : matches.filter((m) => m.new_trail_distance_m > NEW_GROUND_THRESHOLD_M);
-        if (relevantMatches.length > 0) {
-          const updated = await writeTrailDescription(userId, act.id, parseInt(act.strava_activity_id), matches, mode);
-          if (updated) descUpdated++;
-        } else {
-          await pool.query("UPDATE activities SET strava_description_updated = TRUE WHERE id = $1", [act.id]).catch(() => {});
-        }
+        // writeTrailDescription itself now decides whether mode filtering
+        // finding nothing relevant means stripping a stale block down to
+        // nothing, leaving it untouched, or writing a fresh one — and
+        // checkpoints strava_description_updated on any normal completion
+        // either way, so there's nothing left for this caller to pre-filter
+        // or branch on.
+        const updated = await writeTrailDescription(userId, act.id, parseInt(act.strava_activity_id), matches, mode);
+        if (updated) descUpdated++;
       } catch (err) {
         if (err instanceof ScopeError) {
           console.warn("[sync-engine] Scope error updating description — skipping:", err.message);
