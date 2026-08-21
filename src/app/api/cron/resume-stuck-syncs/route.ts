@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
 import { pool } from "@/lib/db";
 import { runSyncChunk, finishSync } from "@/lib/sync-engine";
-import { matchNextBatch } from "@/lib/match-trails";
+import { triggerMatchDrain } from "@/lib/match-chain";
 import { triggerBacklogDrain } from "@/lib/description-chain";
 import { logSyncEvent } from "@/lib/sync-log";
 
@@ -28,22 +28,27 @@ export const maxDuration = 60;
 // dashboard once a day themselves.
 const PER_USER_BUDGET_MS = 8_000;
 const STALE_SYNC_TIME_BUDGET_MS = 25_000;
-const TOTAL_TIME_BUDGET_MS = 50_000;
 const STALE_THRESHOLD_MINUTES = 3;
 
-// Second phase, same run: sweep up sync-engine's own deferred trails.
+// Second phase, same run: kick off the daily trail-match backlog drain.
 // finishSync only ever matches against the trails near *that chunk's* new
 // activities, capped at MAX_TRAILS_PER_FINISH_SYNC — see the comment there.
 // For an account whose backfill touches more than the cap in one area, the
-// overflow trails get zero automatic follow-up once sync_status flips to
-// 'complete' and no further chunks/webhook events arrive to re-trigger
+// overflow trails get zero automatic follow-up unless something re-triggers
 // matching near them. Previously the only recovery was a human noticing
 // (see /api/admin/rematch's "Paul Crowe investigation" — Chris Rance and
 // Luke Barton-Davis, 2026-08-19, were the same bug) and manually rematching.
-// Reuses trail_match_checks as the resume checkpoint, same as the admin
-// route, so this and a manual admin call never duplicate work or race.
-const MATCH_SWEEP_USERS_PER_RUN = 5;
-const MATCH_SWEEP_TRAILS_PER_USER = 30;
+//
+// Used to be a bounded in-process loop here (5 users/run, 30 trails/user,
+// within this invocation's own ~50s ceiling) — too slow for a dormant
+// account: pre-launch review, 2026-08-21, found 6 of 10 users still sitting
+// at 8-245 of 1,181 trails checked, weeks after their last sync, because
+// nothing had ever prompted a chain to run for them and the old sweep would
+// have taken over a month to close a 1,100-trail gap at 30/day. Like phase
+// 3 below, triggerMatchDrain hands off to a waitUntil()-chained background
+// job (see match-chain.ts's runMatchDrainHop) that cycles through EVERY
+// user with incomplete trail_match_checks, 200 trails at a time, entirely
+// independent of this invocation's own 60s ceiling.
 
 // Third phase, same run: kick off the daily description-backlog drain.
 // Unlike phases 1 and 2, this ISN'T bounded to this invocation's own time
@@ -114,66 +119,15 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Phase 2: safety net for sync-engine's deferred trail matches. The
-  // primary path is now the server-side waitUntil()-chained background job
-  // (see match-chain.ts), triggered from /api/sync/activities on sync
-  // completion and from dashboard/page.tsx on any visit with leftover
-  // matching — neither depends on the browser staying open. This sweep is
-  // the once-a-day backstop for whatever that still misses: a chain that
-  // fails to dispatch its next hop, a deploy restarting mid-chain, or an
-  // account that hasn't synced or opened the dashboard since a chain last
-  // stalled. Bounded to a handful of users per run so the backlog drains
-  // fairly across days rather than one account eating the whole time budget.
-  const matchResults: Array<{ userId: string; checkedThisRun: number; matchedThisRun: number; done: boolean }> = [];
-
-  if (Date.now() - startedAt < TOTAL_TIME_BUDGET_MS) {
-    const { rows: incompleteUsers } = await pool.query<{ id: string; first_name: string | null }>(
-      `SELECT u.id, u.first_name
-       FROM users u
-       WHERE u.sync_status = 'complete'
-         AND EXISTS (
-           SELECT 1 FROM trails t
-           WHERE NOT EXISTS (
-             SELECT 1 FROM trail_match_checks c WHERE c.user_id = u.id AND c.trail_id = t.id
-           )
-         )
-       ORDER BY u.last_synced_at ASC
-       LIMIT ${MATCH_SWEEP_USERS_PER_RUN}`
-    );
-
-    for (const user of incompleteUsers) {
-      const remainingBudget = TOTAL_TIME_BUDGET_MS - (Date.now() - startedAt);
-      if (remainingBudget <= 0) {
-        console.log(`[cron/resume-stuck-syncs] Match-sweep budget reached — ${incompleteUsers.length - matchResults.length} user(s) deferred to next run`);
-        break;
-      }
-
-      const result = await matchNextBatch(user.id, MATCH_SWEEP_TRAILS_PER_USER, remainingBudget);
-
-      logSyncEvent(user.id, "cron_match_sweep", {
-        checkedThisRun: result.checkedThisBatch,
-        matchedThisRun: result.matchedThisBatch,
-        done: result.done,
-      });
-      console.log(`[cron/resume-stuck-syncs] match sweep — ${user.first_name ?? user.id}: checked ${result.checkedThisBatch}, matched ${result.matchedThisBatch}, done=${result.done}`);
-
-      matchResults.push({
-        userId: user.id,
-        checkedThisRun: result.checkedThisBatch,
-        matchedThisRun: result.matchedThisBatch,
-        done: result.done,
-      });
-    }
-  }
-
   const origin = new URL(request.url).origin;
+  waitUntil(triggerMatchDrain(origin));
   waitUntil(triggerBacklogDrain(origin));
 
   return NextResponse.json({
     staleUsersFound: staleUsers.length,
     processed: results.length,
     results,
-    matchSweep: matchResults,
+    matchDrainStarted: true,
     descriptionDrainStarted: true,
   });
 }

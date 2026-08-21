@@ -1,4 +1,6 @@
+import { pool } from "@/lib/db";
 import { matchNextBatch } from "@/lib/match-trails";
+import { logSyncEvent } from "@/lib/sync-log";
 
 // Same batch shape as the admin route and the old client-driven endpoint —
 // one call's worth of real work, safely within Vercel's 60s function cap.
@@ -88,4 +90,111 @@ export async function runMatchBatchAndChain(
 /** Starts a fresh chain (hop 0) — the entry point callers actually use. */
 export function triggerMatchChain(userId: string, origin: string): Promise<void> {
   return runMatchBatchAndChain(userId, origin, 0);
+}
+
+// ── Daily match-backlog drain (cron-triggered) ──────────────────────────────
+//
+// runMatchBatchAndChain above is reactive and scoped to one user — it only
+// ever runs for whoever just synced or opened the dashboard. Dormant
+// accounts (set up once, never revisited) never trigger it at all: found
+// during the 2026-08-21 pre-launch review, 6 of 10 users were still sitting
+// at 8-245 of 1,181 trails checked, weeks after their last sync, because
+// nothing had ever prompted their chain to run. The old cron sweep (5
+// users/day, 30 trails/user) was too slow to close that on its own — at
+// that rate a user needing 1,100+ trails would take over a month. This is
+// the proactive equivalent of description-chain.ts's backlog drain: cycles
+// through EVERY user with incomplete matching, not a capped handful, hop
+// after hop, until nothing's left.
+const DRAIN_HOP_BATCH_SIZE = 200;
+const DRAIN_HOP_TIME_BUDGET_MS = 45_000;
+
+// No daily budget cap here unlike the description drain — trail matching
+// doesn't spend a scarce external quota (Strava's rate limit), just DB/CPU
+// time, so there's no equivalent of reserveBackfillSlot to respect. Bounded
+// instead by a generous hop count purely as a backstop against a chain that
+// somehow never converges.
+const MAX_DRAIN_HOPS = 300;
+
+// Least-recently-swept user first (own cron_match_sweep/client_match_batch
+// sync_log events as the clock, NULLS FIRST so a user who's never had one
+// goes first) — same round-robin-by-history trick as
+// description-chain.ts's pickNextDrainCandidate, so one very-behind account
+// doesn't hold up everyone else's turn.
+async function pickNextMatchDrainCandidate(): Promise<{ id: string; first_name: string | null } | null> {
+  const { rows } = await pool.query<{ id: string; first_name: string | null }>(
+    `SELECT u.id, u.first_name
+     FROM users u
+     WHERE EXISTS (
+       SELECT 1 FROM trails t
+       WHERE NOT EXISTS (
+         SELECT 1 FROM trail_match_checks c WHERE c.user_id = u.id AND c.trail_id = t.id
+       )
+     )
+     ORDER BY COALESCE(
+       (SELECT MAX(s.created_at) FROM sync_log s
+        WHERE s.user_id = u.id AND s.event IN ('cron_match_sweep', 'client_match_batch')),
+       '-infinity'
+     ) ASC
+     LIMIT 1`
+  );
+  return rows[0] ?? null;
+}
+
+export async function runMatchDrainHop(origin: string, hop = 0): Promise<void> {
+  if (hop >= MAX_DRAIN_HOPS) {
+    console.warn(`[match-drain] Hop limit (${MAX_DRAIN_HOPS}) reached — stopping; tomorrow's cron picks up where this left off`);
+    return;
+  }
+
+  const candidate = await pickNextMatchDrainCandidate();
+  if (!candidate) {
+    console.log(`[match-drain] Nothing left to drain — stopping after ${hop} hop(s)`);
+    return;
+  }
+
+  let result;
+  try {
+    result = await matchNextBatch(candidate.id, DRAIN_HOP_BATCH_SIZE, DRAIN_HOP_TIME_BUDGET_MS);
+  } catch (err) {
+    console.error(`[match-drain] Batch failed for ${candidate.first_name ?? candidate.id} at hop ${hop}:`, err);
+    return; // don't chain past a hard failure — tomorrow's cron retries cleanly
+  }
+
+  // Logged (not just console) for two reasons: visibility, and — the part
+  // that actually matters for correctness — pickNextMatchDrainCandidate's
+  // own ORDER BY reads this same event back out to decide who's least
+  // recently swept. Without it every hop would re-pick the same candidate
+  // forever, since nothing would ever update their place in the rotation.
+  logSyncEvent(candidate.id, "cron_match_sweep", {
+    triggeredBy: "match-drain",
+    checkedThisBatch: result.checkedThisBatch,
+    matchedThisBatch: result.matchedThisBatch,
+    totalChecked: result.totalChecked,
+    totalTrails: result.totalTrails,
+    done: result.done,
+  });
+  console.log(
+    `[match-drain] hop ${hop} — ${candidate.first_name ?? candidate.id}: checked ${result.checkedThisBatch}, matched ${result.matchedThisBatch}, totalChecked ${result.totalChecked}/${result.totalTrails}`
+  );
+
+  // Whether or not this candidate's OWN backlog just finished, there may be
+  // more — theirs or someone else's — so always re-pick fresh on the next
+  // hop rather than committing to draining one user to completion first.
+  try {
+    const res = await fetch(new URL("/api/internal/continue-match-drain", origin), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...chainAuthHeaders() },
+      body: JSON.stringify({ hop: hop + 1 }),
+    });
+    if (!res.ok) {
+      console.error(`[match-drain] Next hop dispatch returned HTTP ${res.status}`);
+    }
+  } catch (err) {
+    console.error(`[match-drain] Failed to dispatch next hop:`, err);
+  }
+}
+
+/** Starts a fresh daily drain (hop 0) — called once from the cron route. */
+export function triggerMatchDrain(origin: string): Promise<void> {
+  return runMatchDrainHop(origin, 0);
 }
