@@ -5,11 +5,11 @@ import { ADMIN_USER_ID } from "@/lib/admin";
 import RematchButton from "./RematchButton";
 import GenerateInviteCodeButton from "./GenerateInviteCodeButton";
 
-// Keep in sync with DAILY_UPDATE_BUDGET in src/app/api/update-descriptions/route.ts —
+// Keep in sync with DAILY_UPDATE_BUDGET in src/lib/trail-descriptions.ts —
 // backfill_api_usage is the only Strava call counter this app keeps; there's no
 // tracking of total daily calls across sync/webhook/etc., only this one feature's
 // self-imposed share of Strava's app-wide quota.
-const BACKFILL_DAILY_UPDATE_LIMIT = 250;
+const BACKFILL_DAILY_UPDATE_LIMIT = 750;
 
 export const dynamic = "force-dynamic";
 
