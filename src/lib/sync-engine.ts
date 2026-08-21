@@ -12,6 +12,7 @@ import {
   recordDescriptionUpdateFailure,
   ScopeError,
   StravaRateLimitError,
+  NEW_GROUND_THRESHOLD_M,
   type DescriptionMode,
 } from "@/lib/trail-descriptions";
 import { logSyncEvent } from "@/lib/sync-log";
@@ -431,7 +432,7 @@ export async function finishSync(
         // new_with_totals activities on an already-fully-covered route
         // would get re-checked forever — the exact "stuck re-checking the
         // same activities" bug this app hit once already (Rosie's backlog).
-        const relevantMatches = mode === "full" ? matches : matches.filter((m) => m.new_trail_distance_m > 0);
+        const relevantMatches = mode === "full" ? matches : matches.filter((m) => m.new_trail_distance_m > NEW_GROUND_THRESHOLD_M);
         if (relevantMatches.length > 0) {
           const updated = await writeTrailDescription(userId, act.id, parseInt(act.strava_activity_id), matches, mode);
           if (updated) descUpdated++;

@@ -9,6 +9,7 @@ import {
   RateLimiter,
   ScopeError,
   StravaRateLimitError,
+  NEW_GROUND_THRESHOLD_M,
   type DescriptionMode,
 } from "@/lib/trail-descriptions";
 
@@ -178,7 +179,7 @@ export async function GET(request: NextRequest) {
               // already-fully-covered route would get re-checked forever —
               // the exact "stuck re-checking the same activities" bug this
               // app hit once already (Rosie's backlog).
-              const relevantMatches = mode === "full" ? matches : matches.filter((m) => m.new_trail_distance_m > 0);
+              const relevantMatches = mode === "full" ? matches : matches.filter((m) => m.new_trail_distance_m > NEW_GROUND_THRESHOLD_M);
               if (relevantMatches.length === 0) {
                 console.log(`[update-descriptions] Skipping ${i + 1}/${total} — confirmed no new ground: ${act.name}`);
                 await pool.query(

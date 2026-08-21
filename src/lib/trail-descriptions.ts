@@ -77,6 +77,21 @@ async function fetchStrava(url: string, options: RequestInit): Promise<Response>
 
 const BUFFER_METRES = 50;
 
+// Below this, reported "new ground" either isn't real (floating-point
+// noise from computeNewGroundExcludingActivity subtracting two
+// independently-computed geometric lengths that should cancel to exactly
+// 0 but rarely land a hair either side instead) or is real but too small
+// for formatDist's one-decimal-place rounding to ever show as anything
+// but "0.0" — either way a visible but meaningless "+0.0km/mi new trail"
+// line. Reported on Dave Chase's and Amy Hodge's descriptions, 2026-08-21
+// (Amy's case was the second kind: a genuine 2.6m of new ground, correctly
+// above a naive >0 check, still displayed as "+0.0km"). 100m clears both
+// failure modes with margin in either unit (0.05mi, the smallest distance
+// that rounds to a non-zero "0.1" at one decimal place, is ~80m — the
+// tighter constraint of the two units) and is still a trivial cutoff
+// against real trail lengths of tens to hundreds of km.
+export const NEW_GROUND_THRESHOLD_M = 100;
+
 export type DescriptionMode = "full" | "new_only" | "new_with_totals";
 
 interface TrailMatchRow {
@@ -231,7 +246,7 @@ function buildTrailBlock(matches: TrailMatch[], unit: DistanceUnit, mode: Descri
       return `🥾 ${m.name}: +${newDist}${label} new trail (${totals})`;
     }
     // mode === "full"
-    return m.new_trail_distance_m > 0
+    return m.new_trail_distance_m > NEW_GROUND_THRESHOLD_M
       ? `🥾 ${m.name}: +${newDist}${label} new trail (${totals})`
       : `🥾 ${m.name}: ${totals}`;
   });
@@ -246,8 +261,8 @@ function buildTrailBlock(matches: TrailMatch[], unit: DistanceUnit, mode: Descri
  * @param stravaActivityId Strava's numeric activity ID
  * @param matches         Pre-fetched trail matches (call getActivityTrailMatches first)
  * @param mode            'full' writes every matched trail; 'new_only'/'new_with_totals'
- *                        only write trails with new_trail_distance_m > 0 — with none,
- *                        this returns false before making any Strava API calls at all.
+ *                        only write trails with new_trail_distance_m > NEW_GROUND_THRESHOLD_M
+ *                        — with none, this returns false before making any Strava API calls at all.
  * @param delayMs         Optional delay before making Strava API calls
  * @returns true if the description was updated, false if no changes were needed
  */
@@ -261,7 +276,7 @@ export async function writeTrailDescription(
   rateLimiter?: { waitForSlot(): Promise<void> }
 ): Promise<boolean> {
   const relevantMatches =
-    mode === "full" ? matches : matches.filter((m) => m.new_trail_distance_m > 0);
+    mode === "full" ? matches : matches.filter((m) => m.new_trail_distance_m > NEW_GROUND_THRESHOLD_M);
   if (relevantMatches.length === 0) return false;
 
   if (delayMs > 0) {
@@ -505,7 +520,7 @@ export async function processDescriptionBatch(
       // call can pick it back up once it's real.
       if (matches.length === 0) continue;
 
-      const relevantMatches = mode === "full" ? matches : matches.filter((m) => m.new_trail_distance_m > 0);
+      const relevantMatches = mode === "full" ? matches : matches.filter((m) => m.new_trail_distance_m > NEW_GROUND_THRESHOLD_M);
       if (relevantMatches.length === 0) {
         await pool.query(
           "UPDATE activities SET strava_description_updated = TRUE WHERE id = $1",
