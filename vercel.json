@@ -12,12 +12,19 @@
     },
     "src/app/api/webhook/strava/route.ts": {
       "maxDuration": 60
+    },
+    "src/app/api/internal/health-check/route.ts": {
+      "maxDuration": 60
     }
   },
   "crons": [
     {
       "path": "/api/cron/resume-stuck-syncs",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/internal/health-check",
+      "schedule": "30 3 * * *"
     }
   ]
 }
