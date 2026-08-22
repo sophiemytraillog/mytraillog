@@ -1,7 +1,7 @@
 import { Pool, QueryResultRow } from "pg";
 
 // Singleton pool — prevents exhausting connections during Next.js hot reloads
-const globalForPg = globalThis as unknown as { _pgPool?: Pool };
+const globalForPg = globalThis as unknown as { _pgPool?: Pool; _pgBatchPool?: Pool };
 
 // REVERTED: a locally-reproduced "self-signed certificate in certificate
 // chain" issue with connectionString looked like a real bug (see git
@@ -48,6 +48,38 @@ if (isNewPool) {
 
 if (process.env.NODE_ENV !== "production") {
   globalForPg._pgPool = pool;
+}
+
+// Separate, deliberately small pool for unattended background sweeps — the
+// daily trail-match drain and description-backlog drain (see match-chain.ts's
+// runMatchDrainHop and description-chain.ts's runBacklogDrainHop). Root cause
+// this exists to fix (2026-08-22): those sweeps run continuously across every
+// user in the account, and Supabase's pooler has a hard session-count ceiling
+// shared by everything hitting it. Giving them their own pool with a small
+// `max` means they can never claim more than a couple of slots no matter how
+// long they run, guaranteeing `pool` — used by the Strava webhook and other
+// live, user-facing requests — always has room. connectionTimeoutMillis is
+// generously long here for the same reason: a background sweep can afford to
+// wait several seconds for a free connection; a webhook response can't.
+export const batchPool =
+  globalForPg._pgBatchPool ??
+  new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false },
+    max: process.env.NODE_ENV === "production" ? 1 : 3,
+    idleTimeoutMillis: 10_000,
+    connectionTimeoutMillis: 20_000,
+  });
+
+const isNewBatchPool = !globalForPg._pgBatchPool;
+if (isNewBatchPool) {
+  batchPool.on("error", (err) => {
+    console.error("[db] Idle batch-pool client error:", err.message);
+  });
+}
+
+if (process.env.NODE_ENV !== "production") {
+  globalForPg._pgBatchPool = batchPool;
 }
 
 export async function query<T extends QueryResultRow = QueryResultRow>(

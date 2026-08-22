@@ -1,5 +1,9 @@
-import { pool } from "@/lib/db";
+import { pool, batchPool } from "@/lib/db";
 import { processDescriptionBatch } from "@/lib/trail-descriptions";
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 const CHAIN_TIME_BUDGET_MS = 45_000;
 
@@ -144,7 +148,12 @@ export async function runBacklogDrainHop(origin: string, hop = 0): Promise<void>
 
   let result;
   try {
-    result = await processDescriptionBatch(candidate.id, DRAIN_HOP_TIME_BUDGET_MS, "cron-drain");
+    // batchPool, not the shared `pool` — same fix as match-chain.ts's
+    // runMatchDrainHop, and for the same reason: this sweep runs unattended
+    // across every user with pending backlog and previously competed with
+    // the Strava webhook for the same limited Supabase pooler slots. See the
+    // comment there for the full root-cause writeup (2026-08-22).
+    result = await processDescriptionBatch(candidate.id, DRAIN_HOP_TIME_BUDGET_MS, "cron-drain", batchPool);
   } catch (err) {
     console.error(`[description-drain] Batch failed for ${candidate.first_name ?? candidate.id} at hop ${hop}:`, err);
     return; // don't chain past a hard failure — tomorrow's cron retries cleanly
@@ -157,6 +166,14 @@ export async function runBacklogDrainHop(origin: string, hop = 0): Promise<void>
   if (result.budgetExhausted) {
     console.log(`[description-drain] Daily budget spent after ${hop + 1} hop(s) — stopping for today`);
     return;
+  }
+
+  // Kept short deliberately — eats into the same 60s Vercel function ceiling
+  // as everything else in this hop, on top of DRAIN_HOP_TIME_BUDGET_MS's own
+  // 45s. See match-chain.ts's runMatchDrainHop for the matching backoff.
+  if (result.hadErrors) {
+    console.warn(`[description-drain] Hop ${hop} hit errors — backing off before the next hop`);
+    await sleep(5_000);
   }
 
   // Whether or not this candidate's OWN backlog just finished, there may be

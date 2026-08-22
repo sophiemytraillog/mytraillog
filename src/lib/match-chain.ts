@@ -1,6 +1,10 @@
-import { pool } from "@/lib/db";
+import { pool, batchPool } from "@/lib/db";
 import { matchNextBatch } from "@/lib/match-trails";
 import { logSyncEvent } from "@/lib/sync-log";
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 // Same batch shape as the admin route and the old client-driven endpoint —
 // one call's worth of real work, safely within Vercel's 60s function cap.
@@ -154,7 +158,16 @@ export async function runMatchDrainHop(origin: string, hop = 0): Promise<void> {
 
   let result;
   try {
-    result = await matchNextBatch(candidate.id, DRAIN_HOP_BATCH_SIZE, DRAIN_HOP_TIME_BUDGET_MS);
+    // batchPool, not the shared `pool` — this sweep runs unattended across
+    // every user in the account and can take hundreds of hops. Root cause
+    // this exists to fix (2026-08-22): running on the shared pool, this drain
+    // and the description drain below competed with the Strava webhook for
+    // the same handful of Supabase pooler slots, and a live user's real-time
+    // activity sync silently lost the race (webhook/strava's handleNewActivity
+    // failed with an unlogged connection error — see the fix there). batchPool
+    // has its own small `max` specifically so this can never crowd out
+    // latency-sensitive requests.
+    result = await matchNextBatch(candidate.id, DRAIN_HOP_BATCH_SIZE, DRAIN_HOP_TIME_BUDGET_MS, batchPool);
   } catch (err) {
     console.error(`[match-drain] Batch failed for ${candidate.first_name ?? candidate.id} at hop ${hop}:`, err);
     return; // don't chain past a hard failure — tomorrow's cron retries cleanly
@@ -176,6 +189,22 @@ export async function runMatchDrainHop(origin: string, hop = 0): Promise<void> {
   console.log(
     `[match-drain] hop ${hop} — ${candidate.first_name ?? candidate.id}: checked ${result.checkedThisBatch}, matched ${result.matchedThisBatch}, totalChecked ${result.totalChecked}/${result.totalTrails}`
   );
+
+  // Back off before the next hop if this one hit real failures — a signal
+  // the pool is under pressure (batchPool's own small `max` filling up, or
+  // Supabase's pooler itself near its session cap) rather than one-off bad
+  // luck on a single trail. Pausing here gives that pressure a chance to
+  // clear instead of the drain immediately dispatching another hop and
+  // compounding it.
+  // Kept short (not, say, 15s) deliberately — this sleep eats into the same
+  // 60s Vercel function ceiling as everything else in this hop, on top of
+  // DRAIN_HOP_TIME_BUDGET_MS's own 45s. Long enough to matter, short enough
+  // that it can't push a hop past its own function timeout and lose the
+  // chain until the next cron day.
+  if (result.hadFailures) {
+    console.warn(`[match-drain] Hop ${hop} hit failures — backing off before the next hop`);
+    await sleep(5_000);
+  }
 
   // Whether or not this candidate's OWN backlog just finished, there may be
   // more — theirs or someone else's — so always re-pick fresh on the next

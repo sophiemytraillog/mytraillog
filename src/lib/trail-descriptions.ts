@@ -1,3 +1,4 @@
+import type { Pool } from "pg";
 import { pool } from "@/lib/db";
 import { getValidAccessToken } from "@/lib/strava";
 import { formatDist, unitLabel, type DistanceUnit } from "@/lib/distance";
@@ -145,9 +146,10 @@ export interface TrailMatch extends TrailMatchRow {
 export async function getActivityTrailMatches(
   userId: string,
   activityDbId: string,
-  newGroundByTrailId?: Map<string, number>
+  newGroundByTrailId?: Map<string, number>,
+  dbPool: Pool = pool
 ): Promise<TrailMatch[]> {
-  const { rows } = await pool.query<TrailMatchRow>(
+  const { rows } = await dbPool.query<TrailMatchRow>(
     `SELECT t.id AS trail_id,
             t.name,
             LEAST(
@@ -192,7 +194,7 @@ export async function getActivityTrailMatches(
   for (const r of rows) {
     const newGround = newGroundByTrailId
       ? (newGroundByTrailId.get(r.trail_id) ?? 0)
-      : await computeNewGroundExcludingActivity(userId, activityDbId, r.trail_id, r.completed_distance);
+      : await computeNewGroundExcludingActivity(userId, activityDbId, r.trail_id, r.completed_distance, dbPool);
     results.push({ ...r, new_trail_distance_m: newGround });
   }
   return results;
@@ -278,7 +280,8 @@ export async function writeTrailDescription(
   matches: TrailMatch[],
   mode: DescriptionMode = "full",
   delayMs = 0,
-  rateLimiter?: { waitForSlot(): Promise<void> }
+  rateLimiter?: { waitForSlot(): Promise<void> },
+  dbPool: Pool = pool
 ): Promise<boolean> {
   const relevantMatches =
     mode === "full" ? matches : matches.filter((m) => m.new_trail_distance_m > NEW_GROUND_THRESHOLD_M);
@@ -359,7 +362,7 @@ export async function writeTrailDescription(
     // the callers in sync-engine.ts, trail-descriptions.ts's
     // processDescriptionBatch, and update-descriptions/route.ts, all of
     // which now call this unconditionally instead of pre-filtering.
-    await pool.query(
+    await dbPool.query(
       `UPDATE activities SET strava_description_updated = TRUE WHERE id = $1`,
       [activityDbId]
     ).catch(() => {});
@@ -388,7 +391,7 @@ export async function writeTrailDescription(
     throw new Error(`PUT /activities/${stravaActivityId} failed: HTTP ${putRes.status}: ${body.slice(0, 200)}`);
   }
 
-  await pool.query(
+  await dbPool.query(
     `UPDATE activities SET strava_description_updated = TRUE WHERE id = $1`,
     [activityDbId]
   );
@@ -480,6 +483,10 @@ export interface DescriptionBatchResult {
   remaining: number;
   done: boolean;
   budgetExhausted: boolean;
+  // Mirrors match-trails.ts's MatchBatchResult.hadFailures — lets the drain
+  // hop back off before its next dispatch when this batch hit real errors,
+  // instead of immediately hammering the pool again.
+  hadErrors: boolean;
 }
 
 // One bounded batch of the description backlog for a single user — same
@@ -498,11 +505,12 @@ export interface DescriptionBatchResult {
 export async function processDescriptionBatch(
   userId: string,
   timeBudgetMs: number,
-  triggeredBy: string
+  triggeredBy: string,
+  dbPool: Pool = pool
 ): Promise<DescriptionBatchResult> {
   const startedAt = Date.now();
 
-  const { rows: [userPrefs] } = await pool.query<{
+  const { rows: [userPrefs] } = await dbPool.query<{
     strava_description_updates: boolean;
     description_mode: DescriptionMode;
   }>(
@@ -510,7 +518,7 @@ export async function processDescriptionBatch(
     [userId]
   );
   if (!userPrefs?.strava_description_updates) {
-    return { checkedThisBatch: 0, updatedThisBatch: 0, errorsThisBatch: 0, remaining: 0, done: true, budgetExhausted: false };
+    return { checkedThisBatch: 0, updatedThisBatch: 0, errorsThisBatch: 0, remaining: 0, done: true, budgetExhausted: false, hadErrors: false };
   }
   const mode: DescriptionMode = userPrefs.description_mode ?? "full";
 
@@ -524,7 +532,7 @@ export async function processDescriptionBatch(
   // behind years of old ones. Newest-first fixes both: recent activities
   // get written almost immediately, and the historical backlog still
   // drains in the background behind them, just no longer blocking them.
-  const { rows: activities } = await pool.query<{ id: string; strava_activity_id: string; name: string }>(
+  const { rows: activities } = await dbPool.query<{ id: string; strava_activity_id: string; name: string }>(
     `SELECT DISTINCT a.id, a.strava_activity_id, a.name
      FROM activities a
      JOIN activity_trail_matches atm ON atm.activity_id = a.id
@@ -550,7 +558,7 @@ export async function processDescriptionBatch(
     checkedThisBatch++;
 
     try {
-      const matches = await getActivityTrailMatches(userId, act.id);
+      const matches = await getActivityTrailMatches(userId, act.id, undefined, dbPool);
 
       // Ambiguous — could be a false-positive candidate (the loose
       // backfill-candidate insert) or matching genuinely hasn't landed a
@@ -570,7 +578,7 @@ export async function processDescriptionBatch(
       // on any normal completion either way, so there's nothing left for
       // this caller to pre-filter or branch on.
       const wasUpdated = await writeTrailDescription(
-        userId, act.id, parseInt(act.strava_activity_id), matches, mode, 0, limiter
+        userId, act.id, parseInt(act.strava_activity_id), matches, mode, 0, limiter, dbPool
       );
       if (wasUpdated) updatedThisBatch++;
     } catch (err) {
@@ -584,7 +592,7 @@ export async function processDescriptionBatch(
 
       const { giveUp } = await recordDescriptionUpdateFailure(userId, act.id).catch(() => ({ giveUp: false }));
       if (giveUp) {
-        await pool.query(
+        await dbPool.query(
           "UPDATE activities SET strava_description_updated = TRUE WHERE id = $1",
           [act.id]
         ).catch(() => {});
@@ -605,7 +613,7 @@ export async function processDescriptionBatch(
     budgetExhausted,
   });
 
-  return { checkedThisBatch, updatedThisBatch, errorsThisBatch, remaining, done, budgetExhausted };
+  return { checkedThisBatch, updatedThisBatch, errorsThisBatch, remaining, done, budgetExhausted, hadErrors: errorsThisBatch > 0 };
 }
 
 export class ScopeError extends Error {

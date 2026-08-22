@@ -1,3 +1,4 @@
+import type { Pool } from "pg";
 import { pool } from "@/lib/db";
 import { CYCLING_ACTIVITY_TYPES } from "@/lib/strava";
 
@@ -150,9 +151,10 @@ export async function computeNewGroundExcludingActivity(
   userId: string,
   activityId: string,
   trailId: string,
-  currentCompletedDistanceM: number
+  currentCompletedDistanceM: number,
+  dbPool: Pool = pool
 ): Promise<number> {
-  const client = await pool.connect();
+  const client = await dbPool.connect();
   try {
     await client.query("BEGIN");
     await client.query("SET LOCAL statement_timeout = '20000'");
@@ -187,8 +189,12 @@ export async function computeNewGroundExcludingActivity(
   }
 }
 
-export async function computeTrailProgress(userId: string, trailIds?: string[]): Promise<number> {
-  const { rows: [userPrefs] } = await pool.query<{ include_cycling: boolean }>(
+export async function computeTrailProgress(
+  userId: string,
+  trailIds?: string[],
+  dbPool: Pool = pool
+): Promise<number> {
+  const { rows: [userPrefs] } = await dbPool.query<{ include_cycling: boolean }>(
     "SELECT include_cycling FROM users WHERE id = $1",
     [userId]
   );
@@ -196,16 +202,16 @@ export async function computeTrailProgress(userId: string, trailIds?: string[]):
   const cyclingTypes = Array.from(CYCLING_ACTIVITY_TYPES);
 
   const { rows: trails } = trailIds && trailIds.length > 0
-    ? await pool.query<{ id: string }>(
+    ? await dbPool.query<{ id: string }>(
         "SELECT id FROM trails WHERE id = ANY($1::uuid[]) ORDER BY name",
         [trailIds]
       )
-    : await pool.query<{ id: string }>("SELECT id FROM trails ORDER BY name");
+    : await dbPool.query<{ id: string }>("SELECT id FROM trails ORDER BY name");
 
   let matched = 0;
 
   for (const trail of trails) {
-    const client = await pool.connect();
+    const client = await dbPool.connect();
     // Remove any listener left over from a previous iteration (pool reuses client objects).
     client.removeAllListeners("error");
     client.on("error", (err) => {
@@ -250,7 +256,7 @@ export async function computeTrailProgress(userId: string, trailIds?: string[]):
       // this a full-account sweep can't tell "checked, no match" apart from
       // "never checked" and would needlessly recheck it forever. Best-effort:
       // a failure here shouldn't undo the matching work that just succeeded.
-      await pool.query(
+      await dbPool.query(
         `INSERT INTO trail_match_checks (user_id, trail_id, matched)
          VALUES ($1, $2, $3)
          ON CONFLICT (user_id, trail_id) DO UPDATE SET matched = EXCLUDED.matched, checked_at = NOW()`,
@@ -285,10 +291,14 @@ const BATCH_RETRY_DELAY_MS = 1_500;
 // success path above, so its presence after the call IS the success signal:
 // retry until it appears, up to BATCH_MAX_ATTEMPTS, with a short backoff for
 // transient connection drops to actually clear before retrying.
-async function attemptTrailWithRetry(userId: string, trailId: string): Promise<{ ok: boolean; matched: boolean }> {
+async function attemptTrailWithRetry(
+  userId: string,
+  trailId: string,
+  dbPool: Pool
+): Promise<{ ok: boolean; matched: boolean }> {
   for (let attempt = 1; attempt <= BATCH_MAX_ATTEMPTS; attempt++) {
-    await computeTrailProgress(userId, [trailId]);
-    const { rows } = await pool.query<{ matched: boolean }>(
+    await computeTrailProgress(userId, [trailId], dbPool);
+    const { rows } = await dbPool.query<{ matched: boolean }>(
       "SELECT matched FROM trail_match_checks WHERE user_id = $1 AND trail_id = $2",
       [userId, trailId]
     );
@@ -304,6 +314,11 @@ export interface MatchBatchResult {
   totalChecked: number;
   totalTrails: number;
   done: boolean;
+  // True if any trail in this batch failed every attempt — a signal to the
+  // caller (specifically the drain hop) that the connection pool may be
+  // under pressure and it's worth backing off before dispatching the next
+  // hop, rather than immediately hammering again.
+  hadFailures: boolean;
 }
 
 // Same bbox tolerance as sync-engine.ts's NEARBY_TRAILS_BBOX_DEGREES —
@@ -341,11 +356,12 @@ const STALE_CHECK_BBOX_DEGREES = 0.003;
 export async function matchNextBatch(
   userId: string,
   limit: number,
-  timeBudgetMs?: number
+  timeBudgetMs?: number,
+  dbPool: Pool = pool
 ): Promise<MatchBatchResult> {
   const startedAt = Date.now();
 
-  const { rows: candidates } = await pool.query<{ id: string }>(
+  const { rows: candidates } = await dbPool.query<{ id: string }>(
     `SELECT t.id
      FROM trails t
      LEFT JOIN trail_match_checks c ON c.user_id = $1 AND c.trail_id = t.id
@@ -368,7 +384,7 @@ export async function matchNextBatch(
 
   for (const trail of candidates) {
     if (timeBudgetMs !== undefined && Date.now() - startedAt > timeBudgetMs) break;
-    const { ok, matched } = await attemptTrailWithRetry(userId, trail.id);
+    const { ok, matched } = await attemptTrailWithRetry(userId, trail.id, dbPool);
     if (ok) {
       checkedThisBatch++;
       if (matched) matchedThisBatch++;
@@ -381,16 +397,19 @@ export async function matchNextBatch(
   // trail that failed because of a transient blip earlier in this call may
   // well succeed a few seconds later, worth one more try before giving up
   // for this call.
+  let stillFailingAfterRetry = 0;
   for (const trailId of stillFailing) {
     if (timeBudgetMs !== undefined && Date.now() - startedAt > timeBudgetMs) break;
-    const { ok, matched } = await attemptTrailWithRetry(userId, trailId);
+    const { ok, matched } = await attemptTrailWithRetry(userId, trailId, dbPool);
     if (ok) {
       checkedThisBatch++;
       if (matched) matchedThisBatch++;
+    } else {
+      stillFailingAfterRetry++;
     }
   }
 
-  const { rows: [totals] } = await pool.query<{ total: string; checked: string }>(
+  const { rows: [totals] } = await dbPool.query<{ total: string; checked: string }>(
     `SELECT
        (SELECT COUNT(*) FROM trails) AS total,
        (SELECT COUNT(*) FROM trail_match_checks WHERE user_id = $1) AS checked`,
@@ -405,6 +424,7 @@ export async function matchNextBatch(
     totalChecked,
     totalTrails,
     done: totalChecked >= totalTrails,
+    hadFailures: stillFailingAfterRetry > 0,
   };
 }
 

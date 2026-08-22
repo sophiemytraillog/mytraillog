@@ -16,6 +16,8 @@ import {
   type DescriptionMode,
 } from "@/lib/trail-descriptions";
 import { triggerDescriptionChain } from "@/lib/description-chain";
+import { triggerMatchChain } from "@/lib/match-chain";
+import { logSyncEvent } from "@/lib/sync-log";
 
 // A single trail's match computation can legitimately take well over a
 // minute for an active user — ST_Union over hundreds/thousands of nearby
@@ -245,6 +247,11 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number, or
     `[webhook/strava] New activity ${activityId} for athlete ${stravaAthleteId}`
   );
 
+  // Hoisted so the catch block below can still log and retry once we know
+  // who this is for, even if the failure happens partway through — see the
+  // catch block for why that matters.
+  let resolvedUserId: string | null = null;
+
   try {
     const { rows: [user] } = await pool.query<{ id: string }>(
       "SELECT id FROM users WHERE strava_id = $1",
@@ -256,6 +263,7 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number, or
       );
       return;
     }
+    resolvedUserId = user.id;
 
     const accessToken = await getValidAccessToken(user.id);
 
@@ -440,9 +448,32 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number, or
       waitUntil(triggerDescriptionChain(user.id, origin, "webhook"));
     }
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     console.error(
       `[webhook/strava] Error processing activity ${activityId}:`,
       err
     );
+
+    // Root cause this exists to fix (2026-08-22): this catch previously only
+    // console.error'd — invisible outside Vercel's own logs, and nothing
+    // ever came back to retry. Confirmed in production: Sophie Davis's
+    // "Morning Run" registered as a trail-match candidate (the cheap
+    // proximity insert above succeeded) but computeTrailProgress never
+    // completed — most likely starved of a DB connection by the background
+    // match/description drains hitting the same pooler limit (see
+    // batchPool in db.ts, added alongside this fix) — and the activity sat
+    // with no progress, no description, and zero record that anything had
+    // gone wrong. Only possible once we know who this is for (a failure
+    // before the user lookup above has nothing to log against or retry).
+    if (resolvedUserId) {
+      logSyncEvent(resolvedUserId, "webhook_activity_error", { activityId, message });
+      // Best-effort retry: re-run matching (picks up this activity's nearby
+      // trails via the staleness check in matchNextBatch's candidate query)
+      // and the description chain (writes it once matching lands). Same
+      // "trigger the chain unconditionally, let it discover there's nothing
+      // to do if that's true" pattern used elsewhere in this file.
+      waitUntil(triggerMatchChain(resolvedUserId, origin));
+      waitUntil(triggerDescriptionChain(resolvedUserId, origin, "webhook_error_retry"));
+    }
   }
 }
