@@ -79,9 +79,9 @@ async function fetchStrava(url: string, options: RequestInit): Promise<Response>
 const BUFFER_METRES = 50;
 
 // Below this, reported "new ground" either isn't real (floating-point
-// noise from computeNewGroundExcludingActivity subtracting two
-// independently-computed geometric lengths that should cancel to exactly
-// 0 but rarely land a hair either side instead) or is real but too small
+// noise intrinsic to ST_Difference/ST_Length near buffer edges — genuinely
+// overlapping coverage rarely cancels to exactly 0, landing a hair either
+// side instead) or is real but too small
 // for formatDist's one-decimal-place rounding to ever show as anything
 // but "0.0" — either way a visible but meaningless "+0.0km/mi new trail"
 // line. Reported on Dave Chase's and Amy Hodge's descriptions, 2026-08-21
@@ -194,7 +194,7 @@ export async function getActivityTrailMatches(
   for (const r of rows) {
     const newGround = newGroundByTrailId
       ? (newGroundByTrailId.get(r.trail_id) ?? 0)
-      : await computeNewGroundExcludingActivity(userId, activityDbId, r.trail_id, r.completed_distance, dbPool);
+      : await computeNewGroundExcludingActivity(userId, activityDbId, r.trail_id, dbPool);
     results.push({ ...r, new_trail_distance_m: newGround });
   }
   return results;

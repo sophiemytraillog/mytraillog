@@ -118,6 +118,12 @@ export async function snapshotTrailProgress(
   return new Map(rows.map((r) => [r.trail_id, r.completed_distance]));
 }
 
+// Two activities' 50 m buffers can only geometrically overlap if their raw
+// paths pass within 100 m (50+50) of each other — 150 m adds margin for
+// curvature/simplification slack without pulling in anything that couldn't
+// possibly share coverage with the target activity.
+const LOCAL_VICINITY_METRES = 150;
+
 /**
  * Isolates ONE activity's true unique contribution to a trail's coverage —
  * used by trail-descriptions.ts's getActivityTrailMatches when no
@@ -133,50 +139,79 @@ export async function snapshotTrailProgress(
  * other 506 activities near that trail already covered the exact same
  * stretch, so the true new-ground contribution was 0m.
  *
- * Deliberately NOT a full re-run of MATCH_SQL's combined-buffer approach
- * with this activity excluded then re-included (would be redoing the same
- * multi-minute-for-a-busy-account computation getActivityTrailMatches was
- * built to avoid in the first place) — this computes only ONE side
- * (coverage from every OTHER activity near this trail) and subtracts it
- * from the trail's already-known, already-cheap-to-read current
- * completed_distance, rather than recomputing the "with this activity"
- * side too. Still a real geometric union over however many other
- * activities are nearby, so it's wrapped in the same statement_timeout
- * safety net computeTrailProgress uses for expensive trails — a timeout or
- * any other failure here returns 0 (safe: undercounts a genuinely-new
- * stretch rather than repeating the original bug of overcounting old
- * ground) instead of throwing and losing the whole description write.
+ * Computes coverage from every OTHER activity NEAR THIS ONE (not near the
+ * trail as a whole) and subtracts it from this activity's own trail
+ * overlap directly. Root cause this replaces (2026-08-22): the previous
+ * version unioned every other activity within range of the ENTIRE trail —
+ * correct, but on a long trail (South West Coast Path, 1,014 km) a
+ * busy account's full activity history near that trail (Sophie Davis: 22)
+ * all had to be re-unioned for every single description write, however far
+ * from THIS activity they actually were. That union routinely exceeded
+ * both the 20s statement_timeout below and, cascading from there, the
+ * Vercel request's own 60s ceiling — confirmed in production logs timing
+ * out inside this function for Sophie's "Morning Run".
+ *
+ * Restricting "other activities" to LOCAL_VICINITY_METRES of THIS activity
+ * (rather than of the trail) is mathematically equivalent, not an
+ * approximation: this activity's own 50 m buffer can't extend past that
+ * radius, so any activity further away literally cannot share coverage
+ * with it regardless of how large or small the account's total activity
+ * count is. The candidate set this filters against scales with how many
+ * OTHER activities happen to run right past this one spot — not with the
+ * trail's length or the account's total history — so this stays fast
+ * whether an account has 20 activities or 20,000. Wrapped in the same
+ * statement_timeout safety net as before — a timeout or any other failure
+ * here returns 0 (safe: undercounts a genuinely-new stretch rather than
+ * repeating the original bug of overcounting old ground) instead of
+ * throwing and losing the whole description write.
  */
 export async function computeNewGroundExcludingActivity(
   userId: string,
   activityId: string,
   trailId: string,
-  currentCompletedDistanceM: number,
   dbPool: Pool = pool
 ): Promise<number> {
   const client = await dbPool.connect();
   try {
     await client.query("BEGIN");
     await client.query("SET LOCAL statement_timeout = '20000'");
-    const { rows: [row] } = await client.query<{ covered_m: number }>(
-      `WITH combined_buffer AS (
-         SELECT ST_Union(ST_Buffer(a.geometry::geography, ${BUFFER_METRES})::geometry) AS geom
-         FROM (SELECT ST_SimplifyPreserveTopology(geometry, 0.001) AS geometry FROM trails WHERE id = $2) t_simplified
-         JOIN activities a
-           ON a.user_id = $1 AND a.id != $3 AND a.geometry IS NOT NULL
-           AND ST_DWithin(a.geometry::geography, t_simplified.geometry::geography, ${BUFFER_METRES + SIMPLIFY_MARGIN})
+    const { rows: [row] } = await client.query<{ new_ground_m: number }>(
+      `WITH this_activity AS (
+         SELECT geometry FROM activities WHERE id = $3 AND user_id = $1
+       ),
+       this_coverage AS (
+         SELECT ST_CollectionExtract(
+           ST_Intersection(t.geometry, ST_Buffer(a.geometry::geography, ${BUFFER_METRES})::geometry),
+           2
+         ) AS geom
+         FROM this_activity a
+         CROSS JOIN (SELECT geometry FROM trails WHERE id = $2) t
+       ),
+       -- Only activities close enough to THIS one to possibly share
+       -- coverage with it — not every activity near the trail.
+       nearby_others AS (
+         SELECT ST_Union(ST_Buffer(o.geometry::geography, ${BUFFER_METRES})::geometry) AS geom
+         FROM activities o, this_activity a
+         WHERE o.user_id = $1
+           AND o.id != $3
+           AND o.geometry IS NOT NULL
+           AND ST_DWithin(o.geometry::geography, a.geometry::geography, ${LOCAL_VICINITY_METRES})
        )
        SELECT COALESCE(
-         ST_Length(ST_CollectionExtract(ST_Intersection(t.geometry, cb.geom), 2)::geography),
+         ST_Length(
+           ST_Difference(
+             tc.geom,
+             COALESCE(no.geom, ST_GeomFromText('GEOMETRYCOLLECTION EMPTY', 4326))
+           )::geography
+         ),
          0
-       ) AS covered_m
-       FROM (SELECT geometry FROM trails WHERE id = $2) t
-       CROSS JOIN combined_buffer cb`,
+       ) AS new_ground_m
+       FROM this_coverage tc
+       CROSS JOIN nearby_others no`,
       [userId, trailId, activityId]
     );
     await client.query("COMMIT");
-    const coveredByOthers = row?.covered_m ?? 0;
-    return Math.max(0, currentCompletedDistanceM - coveredByOthers);
+    return Math.max(0, row?.new_ground_m ?? 0);
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     console.error(
