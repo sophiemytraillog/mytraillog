@@ -78,6 +78,13 @@ async function fetchStrava(url: string, options: RequestInit): Promise<Response>
 
 const BUFFER_METRES = 50;
 
+// Same bbox-pre-filter trick already established in match-trails.ts (see
+// STALE_CHECK_BBOX_DEGREES there) — plain geometry `&&` against
+// simplified_geometry uses the GIST index; ST_DWithin against a
+// non-simplified geometry::geography does not. ~300m margin, safely
+// larger than BUFFER_METRES.
+const CANDIDATE_BBOX_MARGIN_DEGREES = 0.003;
+
 // Below this, reported "new ground" either isn't real (floating-point
 // noise intrinsic to ST_Difference/ST_Length near buffer edges — genuinely
 // overlapping coverage rarely cancels to exactly 0, landing a hair either
@@ -111,6 +118,22 @@ export interface TrailMatch extends TrailMatchRow {
 /**
  * Find which trails an activity overlaps (within 50 m) where the user has
  * recorded progress. Returns an empty array if the activity has no geometry.
+ *
+ * The candidate JOIN pre-filters trails via the indexed bbox `&&` check
+ * against simplified_geometry before the precise ST_DWithin call, and that
+ * precise call itself checks against simplified_geometry too, not the full
+ * geometry — root-caused 2026-08-24 investigating why Paul Crowe's
+ * description drain timed out at Vercel's 60s ceiling with zero progress,
+ * even on activities with a single candidate trail: EXPLAIN ANALYZE showed
+ * the bbox pre-filter correctly narrowing to a handful of candidate rows,
+ * but ST_DWithin against those rows' full (non-simplified) geometry still
+ * took ~2s per activity regardless — the cost is in each candidate
+ * geometry's point count (thousands of vertices for a trail like South
+ * West Coast Path), not the row count a bbox filter reduces. Checking
+ * against simplified_geometry instead cut that to ~0.2s. Full t.geometry
+ * is still used below for activity_trail_distance_m's ST_Intersection —
+ * that only runs once per already-confirmed match, not once per candidate,
+ * so its cost doesn't scale with how many trails get ruled out.
  *
  * completed_distance/completion_percentage fold in manually-filled segments
  * (user_trail_manual_segments) on top of user_trail_progress's GPS-derived
@@ -174,7 +197,8 @@ export async function getActivityTrailMatches(
             ) AS activity_trail_distance_m
      FROM activities a
      JOIN trails t
-       ON ST_DWithin(a.geometry::geography, t.geometry::geography, $3)
+       ON t.simplified_geometry && ST_Expand(a.geometry, ${CANDIDATE_BBOX_MARGIN_DEGREES})
+       AND ST_DWithin(a.geometry::geography, t.simplified_geometry::geography, $3)
      JOIN user_trail_progress utp
        ON utp.trail_id = t.id AND utp.user_id = a.user_id
      LEFT JOIN (
