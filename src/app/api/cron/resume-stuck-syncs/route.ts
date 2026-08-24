@@ -119,9 +119,8 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const origin = new URL(request.url).origin;
-  waitUntil(triggerMatchDrain(origin));
-  waitUntil(triggerBacklogDrain(origin));
+  waitUntil(triggerMatchDrain());
+  waitUntil(triggerBacklogDrain());
 
   return NextResponse.json({
     staleUsersFound: staleUsers.length,

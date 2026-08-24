@@ -25,8 +25,7 @@ export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null);
   const hop = typeof body?.hop === "number" ? body.hop : 0;
 
-  const origin = new URL(request.url).origin;
-  waitUntil(runBacklogDrainHop(origin, hop));
+  waitUntil(runBacklogDrainHop(hop));
 
   return NextResponse.json({ accepted: true, hop });
 }

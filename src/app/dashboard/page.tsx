@@ -1,9 +1,10 @@
-import { cookies, headers } from "next/headers";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { waitUntil } from "@vercel/functions";
 import { query } from "@/lib/db";
 import { getMatchProgress } from "@/lib/match-trails";
 import { triggerMatchChain } from "@/lib/match-chain";
+import { triggerDrainIfNotRunToday } from "@/lib/description-chain";
 import DashboardClient, { type TrailRow } from "./DashboardClient";
 
 interface Athlete {
@@ -164,11 +165,13 @@ export default async function Dashboard({
     // this trigger too. Harmless if a chain is already running (matchNextBatch's
     // upserts are idempotent) or already done (an immediate no-op).
     if (matchProgress.totalChecked < matchProgress.totalTrails) {
-      const h = headers();
-      const host = h.get("host") ?? "localhost:3000";
-      const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
-      waitUntil(triggerMatchChain(userId, `${proto}://${host}`));
+      waitUntil(triggerMatchChain(userId));
     }
+
+    // Backup for the daily cron drain, which isn't reliable enough on its
+    // own (see description-chain.ts's triggerDrainIfNotRunToday) — cheap
+    // no-op once today's drain has actually run from any source.
+    waitUntil(triggerDrainIfNotRunToday());
   }
 
   return (

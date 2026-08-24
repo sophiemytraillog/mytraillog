@@ -1,5 +1,6 @@
 import { pool, batchPool } from "@/lib/db";
 import { processDescriptionBatch } from "@/lib/trail-descriptions";
+import { CHAIN_DISPATCH_ORIGIN } from "@/lib/chain-origin";
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -39,7 +40,6 @@ function chainAuthHeaders(): Record<string, string> {
  */
 export async function runDescriptionBatchAndChain(
   userId: string,
-  origin: string,
   hop = 0,
   triggeredBy = "chain"
 ): Promise<void> {
@@ -69,7 +69,7 @@ export async function runDescriptionBatchAndChain(
   }
 
   try {
-    const res = await fetch(new URL("/api/internal/continue-descriptions", origin), {
+    const res = await fetch(new URL("/api/internal/continue-descriptions", CHAIN_DISPATCH_ORIGIN), {
       method: "POST",
       headers: { "Content-Type": "application/json", ...chainAuthHeaders() },
       body: JSON.stringify({ userId, hop: hop + 1 }),
@@ -85,10 +85,9 @@ export async function runDescriptionBatchAndChain(
 /** Starts a fresh chain (hop 0) — the entry point callers actually use. */
 export function triggerDescriptionChain(
   userId: string,
-  origin: string,
   triggeredBy: string
 ): Promise<void> {
-  return runDescriptionBatchAndChain(userId, origin, 0, triggeredBy);
+  return runDescriptionBatchAndChain(userId, 0, triggeredBy);
 }
 
 // ── Daily backlog drain (cron-triggered) ────────────────────────────────────
@@ -134,7 +133,7 @@ async function pickNextDrainCandidate(): Promise<{ id: string; first_name: strin
   return rows[0] ?? null;
 }
 
-export async function runBacklogDrainHop(origin: string, hop = 0): Promise<void> {
+export async function runBacklogDrainHop(hop = 0): Promise<void> {
   if (hop >= MAX_DRAIN_HOPS) {
     console.warn(`[description-drain] Hop limit (${MAX_DRAIN_HOPS}) reached — stopping; tomorrow's cron picks up where this left off`);
     return;
@@ -180,7 +179,7 @@ export async function runBacklogDrainHop(origin: string, hop = 0): Promise<void>
   // more — theirs or someone else's — so always re-pick fresh on the next
   // hop rather than committing to draining one user to completion first.
   try {
-    const res = await fetch(new URL("/api/internal/continue-description-drain", origin), {
+    const res = await fetch(new URL("/api/internal/continue-description-drain", CHAIN_DISPATCH_ORIGIN), {
       method: "POST",
       headers: { "Content-Type": "application/json", ...chainAuthHeaders() },
       body: JSON.stringify({ hop: hop + 1 }),
@@ -194,6 +193,44 @@ export async function runBacklogDrainHop(origin: string, hop = 0): Promise<void>
 }
 
 /** Starts a fresh daily drain (hop 0) — called once from the cron route. */
-export function triggerBacklogDrain(origin: string): Promise<void> {
-  return runBacklogDrainHop(origin, 0);
+export function triggerBacklogDrain(): Promise<void> {
+  return runBacklogDrainHop(0);
+}
+
+// ── Dashboard-visit backup trigger ──────────────────────────────────────────
+//
+// Root cause this exists to fix (2026-08-24): the cron sweep above is the
+// ONLY thing that's supposed to proactively drain accounts nobody happens
+// to be actively syncing/webhooking right now — but Vercel Cron on the
+// Hobby plan isn't reliable enough to depend on alone. Confirmed in
+// practice: Luke Barton-Davis and Paul Crowe went untouched for 4+ days
+// despite sitting at the front of the least-recently-drained queue the
+// whole time, while daily Strava API usage sat at 3-195 calls against a
+// 1,500 budget — the drain just wasn't firing most days (see
+// chain-origin.ts for the specific bug this turned out to be). Rather than
+// trust the cron alone, every dashboard visit now doubles as a chance to
+// notice "nothing has run yet today" and kick the drain off itself.
+async function hasDrainRunToday(): Promise<boolean> {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM backfill_api_usage WHERE usage_date = CURRENT_DATE LIMIT 1`
+  );
+  return rows.length > 0;
+}
+
+/**
+ * Call from any authenticated page load (wrapped in waitUntil() by the
+ * caller — this never blocks rendering). Cheap on the common path: one
+ * indexed SELECT, no-op once today's backfill_api_usage row already
+ * exists from the cron (or an earlier visitor) having run. Only actually
+ * kicks off a drain hop on whichever visit happens to be first to notice
+ * the day hasn't started yet.
+ */
+export async function triggerDrainIfNotRunToday(): Promise<void> {
+  try {
+    if (await hasDrainRunToday()) return;
+    console.log("[description-drain] No backfill activity recorded yet today — triggering backup drain from a dashboard visit");
+    await triggerBacklogDrain();
+  } catch (err) {
+    console.error("[description-drain] triggerDrainIfNotRunToday failed:", err);
+  }
 }

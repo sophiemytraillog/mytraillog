@@ -99,12 +99,10 @@ export async function POST(req: Request) {
 
   console.log("[webhook/strava] Event:", JSON.stringify(event));
 
-  const origin = new URL(req.url).origin;
-
   if (event.object_type === "athlete" && event.aspect_type === "delete") {
     await handleDeauth(event.object_id);
   } else if (event.object_type === "activity" && event.aspect_type === "create") {
-    waitUntil(handleNewActivity(event.object_id, event.owner_id, origin));
+    waitUntil(handleNewActivity(event.object_id, event.owner_id));
   } else if (event.object_type === "activity" && event.aspect_type === "delete") {
     waitUntil(handleDeletedActivity(event.object_id, event.owner_id));
   } else if (event.object_type === "activity" && event.aspect_type === "update") {
@@ -242,7 +240,7 @@ async function handleUpdatedActivity(activityId: number, stravaAthleteId: number
 // ── New activity ───────────────────────────────────────────────────────────────
 // Fetches the full activity from Strava (needed for the polyline), stores it,
 // then runs trail matching for the user.
-async function handleNewActivity(activityId: number, stravaAthleteId: number, origin: string) {
+async function handleNewActivity(activityId: number, stravaAthleteId: number) {
   console.log(
     `[webhook/strava] New activity ${activityId} for athlete ${stravaAthleteId}`
   );
@@ -445,7 +443,7 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number, or
     // timeout, since it's a cheap no-op when there's genuinely nothing
     // pending (see processDescriptionBatch's discovery query).
     if (wantsDescriptionUpdate) {
-      waitUntil(triggerDescriptionChain(user.id, origin, "webhook"));
+      waitUntil(triggerDescriptionChain(user.id, "webhook"));
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -472,8 +470,8 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number, or
       // and the description chain (writes it once matching lands). Same
       // "trigger the chain unconditionally, let it discover there's nothing
       // to do if that's true" pattern used elsewhere in this file.
-      waitUntil(triggerMatchChain(resolvedUserId, origin));
-      waitUntil(triggerDescriptionChain(resolvedUserId, origin, "webhook_error_retry"));
+      waitUntil(triggerMatchChain(resolvedUserId));
+      waitUntil(triggerDescriptionChain(resolvedUserId, "webhook_error_retry"));
     }
   }
 }

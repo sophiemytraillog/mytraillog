@@ -30,8 +30,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "userId is required" }, { status: 400 });
   }
 
-  const origin = new URL(request.url).origin;
-  waitUntil(runMatchBatchAndChain(userId, origin, hop));
+  waitUntil(runMatchBatchAndChain(userId, hop));
 
   return NextResponse.json({ accepted: true, hop });
 }

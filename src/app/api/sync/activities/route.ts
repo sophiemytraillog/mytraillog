@@ -25,7 +25,6 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const origin = new URL(request.url).origin;
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
@@ -115,11 +114,11 @@ export async function GET(request: NextRequest) {
           // those up now via the same background chain as below, rather
           // than only ever resuming when the user happens to have new
           // activities to sync.
-          waitUntil(triggerMatchChain(userId, origin));
+          waitUntil(triggerMatchChain(userId));
           // Same idea for the description backlog — a previous sync/webhook
           // could have left activities with confirmed trail matches but no
           // description written (see description-chain.ts).
-          waitUntil(triggerDescriptionChain(userId, origin, "sync"));
+          waitUntil(triggerDescriptionChain(userId, "sync"));
           return;
         }
 
@@ -172,11 +171,11 @@ export async function GET(request: NextRequest) {
         // dispatch (not run) the first chained hop, same pattern as the
         // Strava webhook's handleNewActivity — closing this tab right now
         // doesn't stop it.
-        waitUntil(triggerMatchChain(userId, origin));
+        waitUntil(triggerMatchChain(userId));
         // Trail matching that lands here (or later, as the chain above
         // continues) can make activities newly eligible for a description
         // write — catch those up in the background too, same pattern.
-        waitUntil(triggerDescriptionChain(userId, origin, "sync"));
+        waitUntil(triggerDescriptionChain(userId, "sync"));
       } catch (err) {
         const message = err instanceof Error ? err.message : "An unexpected error occurred";
         console.error("[sync/activities] Fatal error:", err);

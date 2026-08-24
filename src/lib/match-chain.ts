@@ -1,6 +1,7 @@
 import { pool, batchPool } from "@/lib/db";
 import { matchNextBatch } from "@/lib/match-trails";
 import { logSyncEvent } from "@/lib/sync-log";
+import { CHAIN_DISPATCH_ORIGIN } from "@/lib/chain-origin";
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -48,7 +49,6 @@ function chainAuthHeaders(): Record<string, string> {
  */
 export async function runMatchBatchAndChain(
   userId: string,
-  origin: string,
   hop = 0
 ): Promise<void> {
   if (hop >= MAX_CHAIN_HOPS) {
@@ -78,7 +78,7 @@ export async function runMatchBatchAndChain(
     // responds immediately and does its batch afterward via its own
     // waitUntil) — not until the rest of the chain finishes, so this
     // invocation's own lifetime stays bounded to just its own batch.
-    const res = await fetch(new URL("/api/internal/continue-matching", origin), {
+    const res = await fetch(new URL("/api/internal/continue-matching", CHAIN_DISPATCH_ORIGIN), {
       method: "POST",
       headers: { "Content-Type": "application/json", ...chainAuthHeaders() },
       body: JSON.stringify({ userId, hop: hop + 1 }),
@@ -92,8 +92,8 @@ export async function runMatchBatchAndChain(
 }
 
 /** Starts a fresh chain (hop 0) — the entry point callers actually use. */
-export function triggerMatchChain(userId: string, origin: string): Promise<void> {
-  return runMatchBatchAndChain(userId, origin, 0);
+export function triggerMatchChain(userId: string): Promise<void> {
+  return runMatchBatchAndChain(userId, 0);
 }
 
 // ── Daily match-backlog drain (cron-triggered) ──────────────────────────────
@@ -144,7 +144,7 @@ async function pickNextMatchDrainCandidate(): Promise<{ id: string; first_name: 
   return rows[0] ?? null;
 }
 
-export async function runMatchDrainHop(origin: string, hop = 0): Promise<void> {
+export async function runMatchDrainHop(hop = 0): Promise<void> {
   if (hop >= MAX_DRAIN_HOPS) {
     console.warn(`[match-drain] Hop limit (${MAX_DRAIN_HOPS}) reached — stopping; tomorrow's cron picks up where this left off`);
     return;
@@ -210,7 +210,7 @@ export async function runMatchDrainHop(origin: string, hop = 0): Promise<void> {
   // more — theirs or someone else's — so always re-pick fresh on the next
   // hop rather than committing to draining one user to completion first.
   try {
-    const res = await fetch(new URL("/api/internal/continue-match-drain", origin), {
+    const res = await fetch(new URL("/api/internal/continue-match-drain", CHAIN_DISPATCH_ORIGIN), {
       method: "POST",
       headers: { "Content-Type": "application/json", ...chainAuthHeaders() },
       body: JSON.stringify({ hop: hop + 1 }),
@@ -224,6 +224,6 @@ export async function runMatchDrainHop(origin: string, hop = 0): Promise<void> {
 }
 
 /** Starts a fresh daily drain (hop 0) — called once from the cron route. */
-export function triggerMatchDrain(origin: string): Promise<void> {
-  return runMatchDrainHop(origin, 0);
+export function triggerMatchDrain(): Promise<void> {
+  return runMatchDrainHop(0);
 }
