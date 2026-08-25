@@ -15,7 +15,7 @@ import {
   ScopeError,
   type DescriptionMode,
 } from "@/lib/trail-descriptions";
-import { triggerDescriptionChain } from "@/lib/description-chain";
+import { triggerDescriptionChain, triggerDrainIfNotRunToday } from "@/lib/description-chain";
 import { triggerMatchChain } from "@/lib/match-chain";
 import { logSyncEvent } from "@/lib/sync-log";
 
@@ -262,6 +262,19 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number) {
       return;
     }
     resolvedUserId = user.id;
+
+    // Backup for the daily cron drain, which isn't reliable enough to
+    // depend on alone (2026-08-25: zero cron-drain activity found in
+    // sync_log across an entire overnight window, with no deploy or other
+    // obvious cause — Vercel Hobby-plan cron scheduling itself just isn't
+    // guaranteed). Every new activity from ANY user is a chance to notice
+    // the day hasn't started yet and kick the drain off — same trigger the
+    // dashboard already uses (description-chain.ts's
+    // triggerDrainIfNotRunToday), just from a second, independent source.
+    // Deliberately not gated on this user's own description preference —
+    // the drain serves every opted-in user, not just whoever's webhook
+    // happened to fire.
+    waitUntil(triggerDrainIfNotRunToday());
 
     const accessToken = await getValidAccessToken(user.id);
 

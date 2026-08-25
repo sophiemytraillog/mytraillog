@@ -2,6 +2,7 @@ import { pool, batchPool } from "@/lib/db";
 import { matchNextBatch } from "@/lib/match-trails";
 import { logSyncEvent } from "@/lib/sync-log";
 import { CHAIN_DISPATCH_ORIGIN } from "@/lib/chain-origin";
+import { ADMIN_USER_ID } from "@/lib/admin";
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -147,12 +148,23 @@ async function pickNextMatchDrainCandidate(): Promise<{ id: string; first_name: 
 export async function runMatchDrainHop(hop = 0): Promise<void> {
   if (hop >= MAX_DRAIN_HOPS) {
     console.warn(`[match-drain] Hop limit (${MAX_DRAIN_HOPS}) reached — stopping; tomorrow's cron picks up where this left off`);
+    logSyncEvent(ADMIN_USER_ID, "match_drain_hop", { hop, outcome: "hop_limit_reached" });
     return;
+  }
+
+  // Same reasoning as description-chain.ts's matching heartbeat
+  // (2026-08-25): the only durable trace of a drain hop was previously the
+  // per-candidate cron_match_sweep row further down — an empty day (or a
+  // cron that silently never invoked this at all) left zero evidence
+  // either way. This at least proves the FIRST hop of a working chain ran.
+  if (hop === 0) {
+    logSyncEvent(ADMIN_USER_ID, "match_drain_hop", { hop, outcome: "started" });
   }
 
   const candidate = await pickNextMatchDrainCandidate();
   if (!candidate) {
     console.log(`[match-drain] Nothing left to drain — stopping after ${hop} hop(s)`);
+    logSyncEvent(ADMIN_USER_ID, "match_drain_hop", { hop, outcome: "nothing_to_drain" });
     return;
   }
 
@@ -169,7 +181,9 @@ export async function runMatchDrainHop(hop = 0): Promise<void> {
     // latency-sensitive requests.
     result = await matchNextBatch(candidate.id, DRAIN_HOP_BATCH_SIZE, DRAIN_HOP_TIME_BUDGET_MS, batchPool);
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     console.error(`[match-drain] Batch failed for ${candidate.first_name ?? candidate.id} at hop ${hop}:`, err);
+    logSyncEvent(ADMIN_USER_ID, "match_drain_hop", { hop, outcome: "hard_failure", candidateId: candidate.id, message });
     return; // don't chain past a hard failure — tomorrow's cron retries cleanly
   }
 

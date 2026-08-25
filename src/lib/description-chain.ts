@@ -1,6 +1,8 @@
 import { pool, batchPool } from "@/lib/db";
 import { processDescriptionBatch } from "@/lib/trail-descriptions";
 import { CHAIN_DISPATCH_ORIGIN } from "@/lib/chain-origin";
+import { logSyncEvent } from "@/lib/sync-log";
+import { ADMIN_USER_ID } from "@/lib/admin";
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -136,12 +138,27 @@ async function pickNextDrainCandidate(): Promise<{ id: string; first_name: strin
 export async function runBacklogDrainHop(hop = 0): Promise<void> {
   if (hop >= MAX_DRAIN_HOPS) {
     console.warn(`[description-drain] Hop limit (${MAX_DRAIN_HOPS}) reached — stopping; tomorrow's cron picks up where this left off`);
+    logSyncEvent(ADMIN_USER_ID, "description_drain_hop", { hop, outcome: "hop_limit_reached" });
     return;
+  }
+
+  // Root cause this exists to fix (2026-08-25): before this, the ONLY
+  // durable trace of a drain hop running was per-candidate sync_log rows
+  // written further down — meaning a hop that found nothing to drain (or
+  // never got invoked at all, e.g. the cron itself silently not firing)
+  // left zero evidence either way. This distinguishes "ran, found nothing"
+  // (this event exists) from "never ran" (it doesn't) — the latter can
+  // only be inferred by its absence, since a function that's never invoked
+  // can't log anything about itself, but at least the FIRST hop of a
+  // working chain now always leaves a trace even on an empty day.
+  if (hop === 0) {
+    logSyncEvent(ADMIN_USER_ID, "description_drain_hop", { hop, outcome: "started" });
   }
 
   const candidate = await pickNextDrainCandidate();
   if (!candidate) {
     console.log(`[description-drain] Nothing left to drain — stopping after ${hop} hop(s)`);
+    logSyncEvent(ADMIN_USER_ID, "description_drain_hop", { hop, outcome: "nothing_to_drain" });
     return;
   }
 
@@ -154,7 +171,9 @@ export async function runBacklogDrainHop(hop = 0): Promise<void> {
     // comment there for the full root-cause writeup (2026-08-22).
     result = await processDescriptionBatch(candidate.id, DRAIN_HOP_TIME_BUDGET_MS, "cron-drain", batchPool);
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     console.error(`[description-drain] Batch failed for ${candidate.first_name ?? candidate.id} at hop ${hop}:`, err);
+    logSyncEvent(ADMIN_USER_ID, "description_drain_hop", { hop, outcome: "hard_failure", candidateId: candidate.id, message });
     return; // don't chain past a hard failure — tomorrow's cron retries cleanly
   }
 

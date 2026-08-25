@@ -5,6 +5,7 @@ import { runSyncChunk, finishSync } from "@/lib/sync-engine";
 import { triggerMatchDrain } from "@/lib/match-chain";
 import { triggerBacklogDrain } from "@/lib/description-chain";
 import { logSyncEvent } from "@/lib/sync-log";
+import { ADMIN_USER_ID } from "@/lib/admin";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -85,6 +86,18 @@ export async function GET(request: NextRequest) {
   } else {
     console.warn("[cron/resume-stuck-syncs] CRON_SECRET not set — endpoint is unauthenticated");
   }
+
+  // Unconditional heartbeat — the only durable proof this invocation
+  // actually happened, independent of anything below succeeding or
+  // failing. Root cause this exists to fix (2026-08-25): every previous
+  // signal this route produced (stale-sync logs, drain events) was
+  // conditional on there being work to do, so a night where nothing was
+  // stuck and nothing was pending left literally zero trace — indistinguishable
+  // from Vercel's cron scheduler simply never having invoked this route at
+  // all. If this event is missing for a given night, the cron didn't fire;
+  // if it's present but the drain events below aren't, the fault is
+  // downstream of this point, not the cron trigger itself.
+  logSyncEvent(ADMIN_USER_ID, "cron_heartbeat", { route: "resume-stuck-syncs" });
 
   const startedAt = Date.now();
   const { rows: staleUsers } = await pool.query<{ id: string; first_name: string | null }>(
