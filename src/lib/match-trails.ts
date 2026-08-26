@@ -159,12 +159,34 @@ const LOCAL_VICINITY_METRES = 150;
  * count is. The candidate set this filters against scales with how many
  * OTHER activities happen to run right past this one spot — not with the
  * trail's length or the account's total history — so this stays fast
- * whether an account has 20 activities or 20,000. Wrapped in the same
- * statement_timeout safety net as before — a timeout or any other failure
- * here returns 0 (safe: undercounts a genuinely-new stretch rather than
- * repeating the original bug of overcounting old ground) instead of
- * throwing and losing the whole description write.
+ * whether an account has 20 activities or 20,000.
+ *
+ * NEARBY_OTHERS_LIMIT caps that candidate set further, for the case the
+ * radius restriction alone doesn't cover: a user who repeats the exact
+ * same popular route often enough that hundreds of their OWN activities
+ * cluster within LOCAL_VICINITY_METRES of any one of them. Root-caused
+ * 2026-08-26: Paul Crowe's "Happy Heartiversary to me" sits at a spot with
+ * 792 of his own other activities within 150 m — ST_Union over that many
+ * buffered geometries took 56s+ for one candidate trail alone, blowing
+ * past this function's own 20s statement_timeout badly enough (Postgres's
+ * cancel handshake itself isn't instant) to still exceed the whole
+ * request's 60s ceiling before the write ever got a chance to checkpoint,
+ * so every future drain hop re-picked the same doomed activity and never
+ * made progress on anyone's backlog. If even a handful of a user's own
+ * nearby-duplicate activities already cover a stretch, that's sufficient
+ * signal — the 793rd near-identical loop isn't adding new information,
+ * just cost. Ordering by recency (not distance — an extra ST_Distance sort
+ * over hundreds of rows would reintroduce the same cost this is avoiding)
+ * before capping is an arbitrary but reasonable tie-break: any bounded
+ * subset of a large duplicate cluster is about as informative as any
+ * other.
+ *
+ * Wrapped in the same statement_timeout safety net as before — a timeout
+ * or any other failure here returns 0 (safe: undercounts a genuinely-new
+ * stretch rather than repeating the original bug of overcounting old
+ * ground) instead of throwing and losing the whole description write.
  */
+const NEARBY_OTHERS_LIMIT = 30;
 export async function computeNewGroundExcludingActivity(
   userId: string,
   activityId: string,
@@ -188,14 +210,22 @@ export async function computeNewGroundExcludingActivity(
          CROSS JOIN (SELECT geometry FROM trails WHERE id = $2) t
        ),
        -- Only activities close enough to THIS one to possibly share
-       -- coverage with it — not every activity near the trail.
-       nearby_others AS (
-         SELECT ST_Union(ST_Buffer(o.geometry::geography, ${BUFFER_METRES})::geometry) AS geom
+       -- coverage with it — not every activity near the trail. Capped at
+       -- NEARBY_OTHERS_LIMIT (see doc comment above) so a spot this user
+       -- revisits constantly doesn't union hundreds of near-duplicates.
+       nearby_others_capped AS (
+         SELECT o.geometry
          FROM activities o, this_activity a
          WHERE o.user_id = $1
            AND o.id != $3
            AND o.geometry IS NOT NULL
            AND ST_DWithin(o.geometry::geography, a.geometry::geography, ${LOCAL_VICINITY_METRES})
+         ORDER BY o.start_date DESC
+         LIMIT ${NEARBY_OTHERS_LIMIT}
+       ),
+       nearby_others AS (
+         SELECT ST_Union(ST_Buffer(geometry::geography, ${BUFFER_METRES})::geometry) AS geom
+         FROM nearby_others_capped
        )
        SELECT COALESCE(
          ST_Length(

@@ -165,7 +165,26 @@ export interface TrailMatch extends TrailMatchRow {
  * the new automatic chain reported 907.8m new on South Downs Way when his
  * other 506 nearby activities had already covered that exact stretch, true
  * new ground 0m.
+ *
+ * The per-trail loop below is time-budgeted (CUMULATIVE_NEW_GROUND_BUDGET_MS)
+ * across ALL of an activity's candidate trails combined, not just each
+ * trail's own internal statement_timeout. Root-caused 2026-08-26: Paul
+ * Crowe's "Happy Heartiversary to me" matches 5 candidate trails; one of
+ * them alone recovers safely within its own 20s cap (falls back to 0), but
+ * stepping through all 5 sequentially still added up to more than Vercel's
+ * 60s function ceiling, killing the whole request before writeTrailDescription
+ * ever got a chance to checkpoint the activity as done — so every future
+ * drain hop re-picked this exact activity and repeated the same failure,
+ * permanently blocking all further progress (not just Paul's) since the
+ * round-robin always lands on whoever's least-recently-drained, and a
+ * candidate that can never complete never gets a chance to drop out of
+ * that position. Once the combined budget is spent, remaining trails fall
+ * back to the same safe 0 already used for an individual timeout — this
+ * activity's write may under-report new ground on a slow trail this one
+ * time, but it FINISHES, which a permanently-wedged queue never would.
  */
+const CUMULATIVE_NEW_GROUND_BUDGET_MS = 30_000;
+
 export async function getActivityTrailMatches(
   userId: string,
   activityDbId: string,
@@ -215,10 +234,19 @@ export async function getActivityTrailMatches(
   );
 
   const results: TrailMatch[] = [];
+  const loopStartedAt = Date.now();
   for (const r of rows) {
-    const newGround = newGroundByTrailId
-      ? (newGroundByTrailId.get(r.trail_id) ?? 0)
-      : await computeNewGroundExcludingActivity(userId, activityDbId, r.trail_id, dbPool);
+    let newGround: number;
+    if (newGroundByTrailId) {
+      newGround = newGroundByTrailId.get(r.trail_id) ?? 0;
+    } else if (Date.now() - loopStartedAt > CUMULATIVE_NEW_GROUND_BUDGET_MS) {
+      console.warn(
+        `[trail-descriptions] Cumulative new-ground budget (${CUMULATIVE_NEW_GROUND_BUDGET_MS}ms) exceeded for activity ${activityDbId} — trail ${r.trail_id} (and any remaining) falling back to 0 so the write can still complete`
+      );
+      newGround = 0;
+    } else {
+      newGround = await computeNewGroundExcludingActivity(userId, activityDbId, r.trail_id, dbPool);
+    }
     results.push({ ...r, new_trail_distance_m: newGround });
   }
   return results;
