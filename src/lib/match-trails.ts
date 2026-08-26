@@ -196,7 +196,12 @@ export async function computeNewGroundExcludingActivity(
   const client = await dbPool.connect();
   try {
     await client.query("BEGIN");
-    await client.query("SET LOCAL statement_timeout = '20000'");
+    // Aligned with trail-descriptions.ts's ACTIVITY_NEW_GROUND_BUDGET_MS
+    // (2026-08-26): that caller now abandons its wait on this call after
+    // 15s regardless, via a race — this query keeps running server-side
+    // past that point either way, so a shorter cap here just means the
+    // abandoned query itself gets cleaned up sooner instead of lingering.
+    await client.query("SET LOCAL statement_timeout = '15000'");
     const { rows: [row] } = await client.query<{ new_ground_m: number }>(
       `WITH this_activity AS (
          SELECT geometry FROM activities WHERE id = $3 AND user_id = $1

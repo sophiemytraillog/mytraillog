@@ -166,24 +166,37 @@ export interface TrailMatch extends TrailMatchRow {
  * other 506 nearby activities had already covered that exact stretch, true
  * new ground 0m.
  *
- * The per-trail loop below is time-budgeted (CUMULATIVE_NEW_GROUND_BUDGET_MS)
+ * The per-trail loop below is HARD time-budgeted (ACTIVITY_NEW_GROUND_BUDGET_MS)
  * across ALL of an activity's candidate trails combined, not just each
  * trail's own internal statement_timeout. Root-caused 2026-08-26: Paul
- * Crowe's "Happy Heartiversary to me" matches 5 candidate trails; one of
- * them alone recovers safely within its own 20s cap (falls back to 0), but
- * stepping through all 5 sequentially still added up to more than Vercel's
- * 60s function ceiling, killing the whole request before writeTrailDescription
- * ever got a chance to checkpoint the activity as done — so every future
- * drain hop re-picked this exact activity and repeated the same failure,
- * permanently blocking all further progress (not just Paul's) since the
- * round-robin always lands on whoever's least-recently-drained, and a
- * candidate that can never complete never gets a chance to drop out of
- * that position. Once the combined budget is spent, remaining trails fall
- * back to the same safe 0 already used for an individual timeout — this
- * activity's write may under-report new ground on a slow trail this one
- * time, but it FINISHES, which a permanently-wedged queue never would.
+ * Crowe's account has several spots he revisits constantly enough that
+ * hundreds of his own activities cluster within meters of each other —
+ * even one candidate trail's own new-ground query at such a spot can take
+ * 50s+ despite recovering "safely" (falling back to 0) within its own 20s
+ * cap, because Postgres's cancel handshake itself isn't instant. A softer
+ * first attempt at this (checking elapsed time only BETWEEN trails, not
+ * bounding each individual call) still let a single slow trail blow the
+ * whole budget before the check ever got a chance to act — confirmed in
+ * production repeatedly: every drain hop that landed on one of these
+ * activities died before writeTrailDescription ever checkpointed it,
+ * so the SAME doomed activity got re-picked forever, permanently blocking
+ * everyone's backlog behind it in the round-robin queue, not just Paul's.
+ *
+ * This version races each individual computeNewGroundExcludingActivity
+ * call against whatever budget remains, so no single trail — however slow
+ * — can consume more than its fair share. The abandoned query keeps
+ * running server-side until its own statement_timeout (see
+ * match-trails.ts) fires independently; racing it here only bounds how
+ * long THIS function waits on it, not the query's own lifetime.
  */
-const CUMULATIVE_NEW_GROUND_BUDGET_MS = 30_000;
+const ACTIVITY_NEW_GROUND_BUDGET_MS = 15_000;
+
+function withDeadline<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
 
 export async function getActivityTrailMatches(
   userId: string,
@@ -239,13 +252,22 @@ export async function getActivityTrailMatches(
     let newGround: number;
     if (newGroundByTrailId) {
       newGround = newGroundByTrailId.get(r.trail_id) ?? 0;
-    } else if (Date.now() - loopStartedAt > CUMULATIVE_NEW_GROUND_BUDGET_MS) {
-      console.warn(
-        `[trail-descriptions] Cumulative new-ground budget (${CUMULATIVE_NEW_GROUND_BUDGET_MS}ms) exceeded for activity ${activityDbId} — trail ${r.trail_id} (and any remaining) falling back to 0 so the write can still complete`
-      );
-      newGround = 0;
     } else {
-      newGround = await computeNewGroundExcludingActivity(userId, activityDbId, r.trail_id, dbPool);
+      const remaining = ACTIVITY_NEW_GROUND_BUDGET_MS - (Date.now() - loopStartedAt);
+      if (remaining <= 0) {
+        newGround = 0;
+      } else {
+        newGround = await withDeadline(
+          computeNewGroundExcludingActivity(userId, activityDbId, r.trail_id, dbPool),
+          remaining,
+          0
+        );
+        if (Date.now() - loopStartedAt > ACTIVITY_NEW_GROUND_BUDGET_MS) {
+          console.warn(
+            `[trail-descriptions] Per-activity new-ground budget (${ACTIVITY_NEW_GROUND_BUDGET_MS}ms) exceeded for activity ${activityDbId} on trail ${r.trail_id} — falling back to 0 so the write can still complete on time`
+          );
+        }
+      }
     }
     results.push({ ...r, new_trail_distance_m: newGround });
   }
@@ -600,7 +622,15 @@ export async function processDescriptionBatch(
   let budgetExhausted = false;
 
   for (let i = 0; i < activities.length; i++) {
-    if (Date.now() - startedAt > timeBudgetMs) break;
+    // Stop with a safety margin, not right at the wire — an activity can
+    // take up to ACTIVITY_NEW_GROUND_BUDGET_MS (15s) just for its new-ground
+    // computation before it even reaches Strava's API, so starting one with
+    // less than that much budget left risks the SAME class of problem this
+    // margin exists to prevent (2026-08-26): stopping cleanly here, with
+    // time to spare, lets the caller (runBacklogDrainHop) dispatch the next
+    // hop promptly instead of racing an activity that has no real chance of
+    // finishing before this function's own ceiling.
+    if (timeBudgetMs - (Date.now() - startedAt) < ACTIVITY_NEW_GROUND_BUDGET_MS) break;
 
     // Strava rate limit reached this run — stop cleanly, a later call
     // (chain hop, cron, or the manual button) resumes from here.

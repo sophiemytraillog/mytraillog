@@ -110,6 +110,19 @@ const DRAIN_HOP_TIME_BUDGET_MS = 45_000;
 // running out of users.
 const MAX_DRAIN_HOPS = 80;
 
+// Temporary deprioritization, 2026-08-26: Paul Crowe's account has several
+// spots he revisits constantly enough (hundreds of his own nearby
+// activities clustered together) that even with the per-activity time caps
+// above, his batches are slower and more failure-prone than everyone
+// else's — and being one of the largest backlogs, the plain
+// least-recently-drained ordering kept giving him an outsized share of
+// turns anyway. Sorted last, not excluded: the ORDER BY below still picks
+// him once no OTHER user has pending work, so this resolves itself
+// automatically as everyone else catches up rather than needing to be
+// manually reverted later. Remove once his backlog is confirmed draining
+// smoothly on its own turns.
+const TEMPORARILY_DEPRIORITIZED_USER_ID = "5116460b-94f7-476f-957c-8678b73778af"; // Paul Crowe
+
 // Least-recently-drained user first (own description_batch events as the
 // clock, NULLS FIRST so a user who's never had one goes first) — each hop
 // only gives one user their turn, so this naturally round-robins across
@@ -126,11 +139,14 @@ async function pickNextDrainCandidate(): Promise<{ id: string; first_name: strin
          JOIN activity_trail_matches atm ON atm.activity_id = a.id
          WHERE a.user_id = u.id AND a.strava_description_updated = FALSE
        )
-     ORDER BY COALESCE(
-       (SELECT MAX(s.created_at) FROM sync_log s WHERE s.user_id = u.id AND s.event = 'description_batch'),
-       '-infinity'
-     ) ASC
-     LIMIT 1`
+     ORDER BY
+       (u.id = $1) ASC,
+       COALESCE(
+         (SELECT MAX(s.created_at) FROM sync_log s WHERE s.user_id = u.id AND s.event = 'description_batch'),
+         '-infinity'
+       ) ASC
+     LIMIT 1`,
+    [TEMPORARILY_DEPRIORITIZED_USER_ID]
   );
   return rows[0] ?? null;
 }
