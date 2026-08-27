@@ -142,7 +142,15 @@ export function triggerDescriptionChain(
 // until reserveBackfillSlot reports the day's 250 spent, so the backlog
 // keeps draining all day without needing anyone to sync, get a webhook
 // event, or click the manual button.
-const DRAIN_HOP_TIME_BUDGET_MS = 45_000;
+// Bumped 45s -> 48s (2026-08-27): most observed hops actually end early
+// because the candidate's own pending queue runs dry before the time
+// budget does, not because the budget itself is the constraint — but for
+// large-backlog accounts (Sophie: ~1,900 pending) every extra second here
+// is directly more activities processed per hop. Left a 12s margin before
+// Vercel's 60s ceiling for the dispatch attempt (see dispatchNextHop)
+// rather than pushing closer — this chain still needs that headroom, even
+// though the external-scheduler path below doesn't.
+const DRAIN_HOP_TIME_BUDGET_MS = 48_000;
 
 // Budget-capped in practice (750/day / ~10-20 activities per hop settles
 // well under this in normal conditions), so this is mainly a backstop
@@ -261,6 +269,115 @@ export async function runBacklogDrainHop(hop = 0): Promise<void> {
 /** Starts a fresh daily drain (hop 0) — called once from the cron route. */
 export function triggerBacklogDrain(): Promise<void> {
   return runBacklogDrainHop(0);
+}
+
+// ── External-scheduler drain (no self-dispatch) ─────────────────────────────
+//
+// Root cause this exists to fix (2026-08-27): the self-dispatching chain
+// above — each hop calling itself via HTTP to trigger the next one — hits
+// Vercel's own anti-recursion protection after 4-5 hops: confirmed directly
+// in production logs, `[chain-dispatch] ... returned HTTP 508` (Loop
+// Detected) on every retry attempt, deterministically, every time. No
+// amount of retrying or backoff gets past this — Vercel is refusing the
+// request on purpose, not failing transiently. Bumping DRAIN_HOP_TIME_BUDGET_MS
+// or MAX_DRAIN_HOPS above can't fix it either: the ceiling is on how many
+// times a route may call itself in a lineage, not on time or hop count.
+//
+// The actual fix is architectural: stop self-dispatching. An external
+// scheduler (cron-job.org or similar, hitting GET /api/internal/drain-batch
+// on a fixed interval — see that route) sends independent HTTP requests
+// with no shared invocation lineage, so loop detection never triggers.
+// Each call runs this function once and returns — no fetch to itself
+// anywhere in here — looping ACROSS MULTIPLE CANDIDATES in-process instead,
+// for as long as this invocation's own time budget allows, which is more
+// efficient per call than the chain ever was anyway (no dispatch overhead,
+// no reserved margin for a next-hop fetch that doesn't exist here).
+//
+// Existing triggers (cron's triggerBacklogDrain, the webhook and dashboard
+// backup triggers) are UNCHANGED and still run alongside this — they cover
+// real-time descriptions for today's new activities; this covers bulk
+// overnight draining via an external cadence instead of self-chaining.
+const EXTERNAL_DRAIN_BATCH_TIME_BUDGET_MS = 50_000;
+
+// Below this, don't bother starting another candidate — processDescriptionBatch's
+// own loop already needs at least ACTIVITY_NEW_GROUND_BUDGET_MS-equivalent
+// margin to attempt even one activity (see trail-descriptions.ts); less
+// than that left in THIS call isn't worth the discovery-query overhead of
+// picking a new candidate that could barely get started before returning.
+const MIN_USEFUL_REMAINING_MS = 15_000;
+
+export interface ExternalDrainBatchResult {
+  candidatesProcessed: number;
+  totalChecked: number;
+  totalUpdated: number;
+  done: boolean;
+  budgetExhausted: boolean;
+  tookMs: number;
+}
+
+/**
+ * Entry point for the external scheduler — one HTTP call in, one JSON
+ * response out, no self-dispatch. Loops across as many candidates as fit
+ * in EXTERNAL_DRAIN_BATCH_TIME_BUDGET_MS, re-picking fresh each time (same
+ * round-robin fairness as the chain — a candidate whose backlog outlasts
+ * this call just gets picked again, less recently drained, next call).
+ */
+export async function runExternalDrainBatch(): Promise<ExternalDrainBatchResult> {
+  const startedAt = Date.now();
+  let candidatesProcessed = 0;
+  let totalChecked = 0;
+  let totalUpdated = 0;
+  let budgetExhausted = false;
+  let done = false;
+
+  for (;;) {
+    const remaining = EXTERNAL_DRAIN_BATCH_TIME_BUDGET_MS - (Date.now() - startedAt);
+    if (remaining < MIN_USEFUL_REMAINING_MS) break;
+
+    const candidate = await pickNextDrainCandidate();
+    if (!candidate) {
+      done = true;
+      break;
+    }
+
+    let result;
+    try {
+      result = await processDescriptionBatch(candidate.id, remaining, "external-drain", batchPool);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[external-drain] Batch failed for ${candidate.first_name ?? candidate.id}:`, err);
+      logSyncEvent(ADMIN_USER_ID, "external_drain_batch", {
+        outcome: "hard_failure",
+        candidateId: candidate.id,
+        message,
+        candidatesProcessed,
+      });
+      break; // stop this call cleanly — the next external trigger retries fresh
+    }
+
+    candidatesProcessed++;
+    totalChecked += result.checkedThisBatch;
+    totalUpdated += result.updatedThisBatch;
+    console.log(
+      `[external-drain] ${candidate.first_name ?? candidate.id}: checked ${result.checkedThisBatch}, updated ${result.updatedThisBatch}`
+    );
+
+    if (result.budgetExhausted) {
+      budgetExhausted = true;
+      break;
+    }
+  }
+
+  const summary: ExternalDrainBatchResult = {
+    candidatesProcessed,
+    totalChecked,
+    totalUpdated,
+    done,
+    budgetExhausted,
+    tookMs: Date.now() - startedAt,
+  };
+  logSyncEvent(ADMIN_USER_ID, "external_drain_batch", { outcome: "completed", ...summary });
+  return summary;
 }
 
 // ── Dashboard-visit backup trigger ──────────────────────────────────────────

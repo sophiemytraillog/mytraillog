@@ -15,6 +15,9 @@
     },
     "src/app/api/internal/health-check/route.ts": {
       "maxDuration": 60
+    },
+    "src/app/api/internal/drain-batch/route.ts": {
+      "maxDuration": 60
     }
   },
   "crons": [
