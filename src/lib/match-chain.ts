@@ -28,6 +28,37 @@ function chainAuthHeaders(): Record<string, string> {
   return secret ? { Authorization: `Bearer ${secret}` } : {};
 }
 
+// Same hardening as description-chain.ts's dispatchNextHop (2026-08-27) —
+// retries a transient dispatch failure instead of letting it silently end
+// the chain, with an explicit per-attempt timeout so a hanging fetch can't
+// eat the whole remaining hop budget across retries.
+const DISPATCH_MAX_ATTEMPTS = 2;
+const DISPATCH_ATTEMPT_TIMEOUT_MS = 5_000;
+const DISPATCH_RETRY_DELAY_MS = 500;
+
+async function dispatchNextHop(path: string, body: Record<string, unknown>): Promise<boolean> {
+  for (let attempt = 1; attempt <= DISPATCH_MAX_ATTEMPTS; attempt++) {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), DISPATCH_ATTEMPT_TIMEOUT_MS);
+    try {
+      const res = await fetch(new URL(path, CHAIN_DISPATCH_ORIGIN), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...chainAuthHeaders() },
+        body: JSON.stringify(body),
+        signal: ac.signal,
+      });
+      if (res.ok) return true;
+      console.error(`[chain-dispatch] ${path} returned HTTP ${res.status} (attempt ${attempt}/${DISPATCH_MAX_ATTEMPTS})`);
+    } catch (err) {
+      console.error(`[chain-dispatch] ${path} failed (attempt ${attempt}/${DISPATCH_MAX_ATTEMPTS}):`, err);
+    } finally {
+      clearTimeout(timer);
+    }
+    if (attempt < DISPATCH_MAX_ATTEMPTS) await sleep(DISPATCH_RETRY_DELAY_MS);
+  }
+  return false;
+}
+
 /**
  * Runs one batch of trail matching for a user, then — if there's more left
  * — hands off to a FRESH serverless invocation via an HTTP call to
@@ -152,14 +183,10 @@ export async function runMatchDrainHop(hop = 0): Promise<void> {
     return;
   }
 
-  // Same reasoning as description-chain.ts's matching heartbeat
-  // (2026-08-25): the only durable trace of a drain hop was previously the
-  // per-candidate cron_match_sweep row further down — an empty day (or a
-  // cron that silently never invoked this at all) left zero evidence
-  // either way. This at least proves the FIRST hop of a working chain ran.
-  if (hop === 0) {
-    logSyncEvent(ADMIN_USER_ID, "match_drain_hop", { hop, outcome: "started" });
-  }
+  // Logged for EVERY hop, not just hop 0 (2026-08-27, same reasoning as
+  // description-chain.ts's dispatchNextHop) — a hop that dies before its
+  // own cron_match_sweep row lands previously left zero trace beyond hop 0.
+  logSyncEvent(ADMIN_USER_ID, "match_drain_hop", { hop, outcome: "started" });
 
   const candidate = await pickNextMatchDrainCandidate();
   if (!candidate) {
@@ -223,18 +250,11 @@ export async function runMatchDrainHop(hop = 0): Promise<void> {
   // Whether or not this candidate's OWN backlog just finished, there may be
   // more — theirs or someone else's — so always re-pick fresh on the next
   // hop rather than committing to draining one user to completion first.
-  try {
-    const res = await fetch(new URL("/api/internal/continue-match-drain", CHAIN_DISPATCH_ORIGIN), {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...chainAuthHeaders() },
-      body: JSON.stringify({ hop: hop + 1 }),
-    });
-    if (!res.ok) {
-      console.error(`[match-drain] Next hop dispatch returned HTTP ${res.status}`);
-    }
-  } catch (err) {
-    console.error(`[match-drain] Failed to dispatch next hop:`, err);
-  }
+  const dispatched = await dispatchNextHop("/api/internal/continue-match-drain", { hop: hop + 1 });
+  logSyncEvent(ADMIN_USER_ID, "match_drain_hop", {
+    hop,
+    outcome: dispatched ? "dispatched_next" : "dispatch_failed",
+  });
 }
 
 /** Starts a fresh daily drain (hop 0) — called once from the cron route. */

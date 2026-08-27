@@ -8,6 +8,46 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+// Root cause this exists to fix (2026-08-27): the drain would run a
+// handful of hops cleanly, then go silent for HOURS with no error and no
+// budgetExhausted flag — remaining work sitting untouched until the next
+// external trigger (cron, webhook, dashboard visit) restarted it from
+// scratch. The dispatch fetch to hand off to the next hop was fire-and-
+// forget: any transient failure (network blip, a slow cold start on the
+// receiving function) just logged a console.error and the chain died,
+// with nothing durable recording that it had even been attempted — so a
+// "did it stop because the dispatch failed, or because the DISPATCHED hop
+// itself died before logging anything" question was unanswerable after
+// the fact. dispatchNextHop retries (transient blips shouldn't kill an
+// otherwise-healthy chain) and its result is always logged by the caller,
+// success or failure, so every hop boundary now leaves durable evidence.
+const DISPATCH_MAX_ATTEMPTS = 2;
+const DISPATCH_ATTEMPT_TIMEOUT_MS = 5_000;
+const DISPATCH_RETRY_DELAY_MS = 500;
+
+async function dispatchNextHop(path: string, body: Record<string, unknown>): Promise<boolean> {
+  for (let attempt = 1; attempt <= DISPATCH_MAX_ATTEMPTS; attempt++) {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), DISPATCH_ATTEMPT_TIMEOUT_MS);
+    try {
+      const res = await fetch(new URL(path, CHAIN_DISPATCH_ORIGIN), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...chainAuthHeaders() },
+        body: JSON.stringify(body),
+        signal: ac.signal,
+      });
+      if (res.ok) return true;
+      console.error(`[chain-dispatch] ${path} returned HTTP ${res.status} (attempt ${attempt}/${DISPATCH_MAX_ATTEMPTS})`);
+    } catch (err) {
+      console.error(`[chain-dispatch] ${path} failed (attempt ${attempt}/${DISPATCH_MAX_ATTEMPTS}):`, err);
+    } finally {
+      clearTimeout(timer);
+    }
+    if (attempt < DISPATCH_MAX_ATTEMPTS) await sleep(DISPATCH_RETRY_DELAY_MS);
+  }
+  return false;
+}
+
 const CHAIN_TIME_BUDGET_MS = 45_000;
 
 // Budget-capped anyway (reserveBackfillSlot won't hand out more than
@@ -104,11 +144,14 @@ export function triggerDescriptionChain(
 // event, or click the manual button.
 const DRAIN_HOP_TIME_BUDGET_MS = 45_000;
 
-// Budget-capped in practice (250/day / ~6-10 activities per hop settles
-// well under this), so this is just a backstop against a hop that somehow
-// keeps reporting "more to do" without ever exhausting the budget or
-// running out of users.
-const MAX_DRAIN_HOPS = 80;
+// Budget-capped in practice (750/day / ~10-20 activities per hop settles
+// well under this in normal conditions), so this is mainly a backstop
+// against a chain that somehow never converges. Raised 80 -> 400
+// (2026-08-27): at a conservative ~5 activities/hop on a bad day, 750/day
+// needs up to ~150 hops to actually reach budgetExhausted — 80 could cut
+// a sustained drain off well before the real stopping condition, silently
+// capping the day's progress far short of budget for no good reason.
+const MAX_DRAIN_HOPS = 400;
 
 // Temporary deprioritization, 2026-08-26: Paul Crowe's account has several
 // spots he revisits constantly enough (hundreds of his own nearby
@@ -158,18 +201,13 @@ export async function runBacklogDrainHop(hop = 0): Promise<void> {
     return;
   }
 
-  // Root cause this exists to fix (2026-08-25): before this, the ONLY
-  // durable trace of a drain hop running was per-candidate sync_log rows
-  // written further down — meaning a hop that found nothing to drain (or
-  // never got invoked at all, e.g. the cron itself silently not firing)
-  // left zero evidence either way. This distinguishes "ran, found nothing"
-  // (this event exists) from "never ran" (it doesn't) — the latter can
-  // only be inferred by its absence, since a function that's never invoked
-  // can't log anything about itself, but at least the FIRST hop of a
-  // working chain now always leaves a trace even on an empty day.
-  if (hop === 0) {
-    logSyncEvent(ADMIN_USER_ID, "description_drain_hop", { hop, outcome: "started" });
-  }
+  // Logged for EVERY hop, not just hop 0 (2026-08-27 — see dispatchNextHop's
+  // comment for why this changed): a hop that dies before completing its
+  // batch previously left zero trace beyond hop 0, making "the dispatch
+  // failed" indistinguishable from "the dispatched hop died silently" after
+  // the fact. Cheap relative to everything else a hop does; sync_log isn't
+  // a hot path.
+  logSyncEvent(ADMIN_USER_ID, "description_drain_hop", { hop, outcome: "started" });
 
   const candidate = await pickNextDrainCandidate();
   if (!candidate) {
@@ -213,18 +251,11 @@ export async function runBacklogDrainHop(hop = 0): Promise<void> {
   // Whether or not this candidate's OWN backlog just finished, there may be
   // more — theirs or someone else's — so always re-pick fresh on the next
   // hop rather than committing to draining one user to completion first.
-  try {
-    const res = await fetch(new URL("/api/internal/continue-description-drain", CHAIN_DISPATCH_ORIGIN), {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...chainAuthHeaders() },
-      body: JSON.stringify({ hop: hop + 1 }),
-    });
-    if (!res.ok) {
-      console.error(`[description-drain] Next hop dispatch returned HTTP ${res.status}`);
-    }
-  } catch (err) {
-    console.error(`[description-drain] Failed to dispatch next hop:`, err);
-  }
+  const dispatched = await dispatchNextHop("/api/internal/continue-description-drain", { hop: hop + 1 });
+  logSyncEvent(ADMIN_USER_ID, "description_drain_hop", {
+    hop,
+    outcome: dispatched ? "dispatched_next" : "dispatch_failed",
+  });
 }
 
 /** Starts a fresh daily drain (hop 0) — called once from the cron route. */
