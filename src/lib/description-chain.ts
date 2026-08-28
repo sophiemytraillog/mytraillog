@@ -297,7 +297,19 @@ export function triggerBacklogDrain(): Promise<void> {
 // backup triggers) are UNCHANGED and still run alongside this — they cover
 // real-time descriptions for today's new activities; this covers bulk
 // overnight draining via an external cadence instead of self-chaining.
-const EXTERNAL_DRAIN_BATCH_TIME_BUDGET_MS = 50_000;
+//
+// Lowered 50s -> 20s (2026-08-27): the actual external scheduler in use
+// (cron-job.org) has a hard 30s request timeout on its side, independent
+// of this route's own maxDuration=60 — a response arriving after 30s
+// would just look like a failure to the scheduler even though the batch
+// itself completed and checkpointed correctly server-side. 20s leaves ~10s
+// of margin for the DB round-trips and Strava calls that happen after the
+// last timing check, comfortably inside 30s. With this budget effectively
+// only fitting one candidate per call (see MIN_USEFUL_REMAINING_MS below),
+// the design leans on cadence instead of per-call size: 30 calls/hour at
+// ~10-15 activities each easily reaches the daily budget across the
+// scheduled window, same total throughput as fewer/bigger calls would give.
+const EXTERNAL_DRAIN_BATCH_TIME_BUDGET_MS = 20_000;
 
 // Below this, don't bother starting another candidate — processDescriptionBatch's
 // own loop already needs at least ACTIVITY_NEW_GROUND_BUDGET_MS-equivalent
