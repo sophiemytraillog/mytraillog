@@ -395,7 +395,10 @@ export interface MatchBatchResult {
 // see that file's comment for why plain geometry `&&` against
 // simplified_geometry (not ST_DWithin/::geography) is what actually uses
 // the GIST index here.
-const STALE_CHECK_BBOX_DEGREES = 0.003;
+// Exported (2026-08-31) so match-chain.ts's pickNextMatchDrainCandidate can
+// use the identical staleness condition when deciding who's eligible for
+// the drain — see the comment there for why that consistency matters.
+export const STALE_CHECK_BBOX_DEGREES = 0.003;
 
 // Processes up to `limit` trails for one user, National Trails first (the
 // ~20 of 1,181 users actually look for). "Needs checking" means either

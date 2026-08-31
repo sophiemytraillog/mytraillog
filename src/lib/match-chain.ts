@@ -1,5 +1,5 @@
 import { pool, batchPool } from "@/lib/db";
-import { matchNextBatch } from "@/lib/match-trails";
+import { matchNextBatch, STALE_CHECK_BBOX_DEGREES } from "@/lib/match-trails";
 import { logSyncEvent } from "@/lib/sync-log";
 import { CHAIN_DISPATCH_ORIGIN } from "@/lib/chain-origin";
 import { ADMIN_USER_ID } from "@/lib/admin";
@@ -156,15 +156,40 @@ const MAX_DRAIN_HOPS = 300;
 // goes first) — same round-robin-by-history trick as
 // description-chain.ts's pickNextDrainCandidate, so one very-behind account
 // doesn't hold up everyone else's turn.
+//
+// Root cause this exists to fix (2026-08-31): this WHERE clause only asked
+// "does this user have any trail with NO check row at all" — it had no
+// staleness awareness, unlike matchNextBatch's own candidate query one
+// level down (which correctly treats a check as needing redoing when a
+// newer nearby activity has landed since — see STALE_CHECK_BBOX_DEGREES in
+// match-trails.ts). Once every user reached full coverage (a check row for
+// every trail, even if some are stale), this outer gate could never select
+// ANYONE again — matchNextBatch was fully capable of resolving stale pairs
+// the moment it got a chance to run, but never got that chance, because
+// the picker in front of it kept reporting "nothing to drain" every single
+// night. Result: the stale count only ever grew (new activities keep
+// invalidating checks) with nothing ever bringing it back down — confirmed
+// via two consecutive nightly cron runs both logging match_drain_hop
+// {"outcome":"nothing_to_drain"} in ~100ms, despite the stale count having
+// grown from 94 to 114 over the same period. Now uses the identical
+// "missing OR stale" condition as matchNextBatch, so a fully-matched user
+// with stale pairs is exactly as eligible as one with missing trails.
 async function pickNextMatchDrainCandidate(): Promise<{ id: string; first_name: string | null } | null> {
   const { rows } = await pool.query<{ id: string; first_name: string | null }>(
     `SELECT u.id, u.first_name
      FROM users u
      WHERE EXISTS (
-       SELECT 1 FROM trails t
-       WHERE NOT EXISTS (
-         SELECT 1 FROM trail_match_checks c WHERE c.user_id = u.id AND c.trail_id = t.id
-       )
+       SELECT t.id
+       FROM trails t
+       LEFT JOIN trail_match_checks c ON c.user_id = u.id AND c.trail_id = t.id
+       WHERE c.trail_id IS NULL
+          OR EXISTS (
+            SELECT 1 FROM activities a
+            WHERE a.user_id = u.id
+              AND a.geometry IS NOT NULL
+              AND a.created_at > c.checked_at
+              AND t.simplified_geometry && ST_Expand(a.geometry, ${STALE_CHECK_BBOX_DEGREES})
+          )
      )
      ORDER BY COALESCE(
        (SELECT MAX(s.created_at) FROM sync_log s
