@@ -171,34 +171,70 @@ const MAX_DRAIN_HOPS = 300;
 // invalidating checks) with nothing ever bringing it back down — confirmed
 // via two consecutive nightly cron runs both logging match_drain_hop
 // {"outcome":"nothing_to_drain"} in ~100ms, despite the stale count having
-// grown from 94 to 114 over the same period. Now uses the identical
-// "missing OR stale" condition as matchNextBatch, so a fully-matched user
-// with stale pairs is exactly as eligible as one with missing trails.
+// grown from 94 to 114 over the same period.
+//
+// First attempt at the staleness check (2026-08-31, same day) drove the
+// correlation from trails: for every one of a user's 1,181 trails, run a
+// subquery over that user's activities checking for a newer nearby one.
+// That's the wrong side to drive from — most users add a handful of new
+// activities a day, far fewer than 1,181 trails — and it had no query-level
+// statement_timeout, so it just hung for the full 60s until Vercel force-
+// killed the whole function, confirmed directly: "Task timed out after 60
+// seconds" with no other error, and match_drain_hop logging "started" with
+// nothing after it, every single time.
+//
+// This version drives from activities instead (JOIN trails ON t.simplified_geometry
+// && ST_Expand(a.geometry, ...) — the same indexed-bbox-on-the-left pattern
+// documented everywhere else in this codebase, e.g. matchNextBatch's own
+// staleness clause and getActivityTrailMatches's candidate query), so
+// Postgres can use idx_trails_simplified_geometry per activity rather than
+// re-scanning a user's whole activity history once per trail. The
+// trail_match_checks join is on its own primary key, not a correlated
+// EXISTS. Also now wrapped in its own bounded statement_timeout — if it's
+// ever slow for some account this doesn't anticipate, it fails fast and
+// this hop just tries again next time, instead of consuming the entire
+// function budget silently.
+const CANDIDATE_QUERY_TIMEOUT_MS = 10_000;
+
 async function pickNextMatchDrainCandidate(): Promise<{ id: string; first_name: string | null } | null> {
-  const { rows } = await pool.query<{ id: string; first_name: string | null }>(
-    `SELECT u.id, u.first_name
-     FROM users u
-     WHERE EXISTS (
-       SELECT t.id
-       FROM trails t
-       LEFT JOIN trail_match_checks c ON c.user_id = u.id AND c.trail_id = t.id
-       WHERE c.trail_id IS NULL
-          OR EXISTS (
-            SELECT 1 FROM activities a
-            WHERE a.user_id = u.id
-              AND a.geometry IS NOT NULL
-              AND a.created_at > c.checked_at
-              AND t.simplified_geometry && ST_Expand(a.geometry, ${STALE_CHECK_BBOX_DEGREES})
-          )
-     )
-     ORDER BY COALESCE(
-       (SELECT MAX(s.created_at) FROM sync_log s
-        WHERE s.user_id = u.id AND s.event IN ('cron_match_sweep', 'client_match_batch')),
-       '-infinity'
-     ) ASC
-     LIMIT 1`
-  );
-  return rows[0] ?? null;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`SET LOCAL statement_timeout = '${CANDIDATE_QUERY_TIMEOUT_MS}'`);
+    const { rows } = await client.query<{ id: string; first_name: string | null }>(
+      `SELECT u.id, u.first_name
+       FROM users u
+       WHERE EXISTS (
+         SELECT 1 FROM trails t
+         WHERE NOT EXISTS (
+           SELECT 1 FROM trail_match_checks c WHERE c.user_id = u.id AND c.trail_id = t.id
+         )
+       )
+       OR EXISTS (
+         SELECT 1
+         FROM activities a
+         JOIN trails t ON t.simplified_geometry && ST_Expand(a.geometry, ${STALE_CHECK_BBOX_DEGREES})
+         JOIN trail_match_checks c ON c.user_id = a.user_id AND c.trail_id = t.id
+         WHERE a.user_id = u.id
+           AND a.geometry IS NOT NULL
+           AND a.created_at > c.checked_at
+       )
+       ORDER BY COALESCE(
+         (SELECT MAX(s.created_at) FROM sync_log s
+          WHERE s.user_id = u.id AND s.event IN ('cron_match_sweep', 'client_match_batch')),
+         '-infinity'
+       ) ASC
+       LIMIT 1`
+    );
+    await client.query("COMMIT");
+    return rows[0] ?? null;
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("[match-drain] pickNextMatchDrainCandidate failed:", err);
+    return null; // safe: this hop finds nothing this time, next hop tries fresh
+  } finally {
+    client.release();
+  }
 }
 
 export async function runMatchDrainHop(hop = 0): Promise<void> {
