@@ -1,4 +1,4 @@
-import { pool, batchPool } from "@/lib/db";
+import { batchPool } from "@/lib/db";
 import { matchNextBatch, STALE_CHECK_BBOX_DEGREES } from "@/lib/match-trails";
 import { logSyncEvent } from "@/lib/sync-log";
 import { CHAIN_DISPATCH_ORIGIN } from "@/lib/chain-origin";
@@ -197,8 +197,24 @@ const MAX_DRAIN_HOPS = 300;
 const CANDIDATE_QUERY_TIMEOUT_MS = 10_000;
 
 async function pickNextMatchDrainCandidate(): Promise<{ id: string; first_name: string | null } | null> {
-  const client = await pool.connect();
+  // batchPool, not the shared `pool` — this picker runs every hop of an
+  // unattended sweep, same reasoning as matchNextBatch's own connection a
+  // few lines down. Root cause this exists to fix (2026-09-01): it used to
+  // grab a connection from the shared `pool` (max 3 in production, shared
+  // with the live Strava webhook) *before* the try block below, so any
+  // failure to acquire one — the pool being busy, a connectionTimeoutMillis
+  // timeout — rejected uncaught, silently killing the whole hop with
+  // nothing logged past match_drain_hop's own "started" entry. Confirmed in
+  // production: three consecutive hops (2026-08-31 19:45, 2026-09-01 03:06,
+  // 2026-09-01 10:25) each logged "started" and then nothing at all — no
+  // "nothing_to_drain", no "hard_failure", no "dispatched_next" — while a
+  // real, growing backlog (390 stale pairs across 9 users) sat undrained.
+  // Moving the connect() inside try/catch means a failed acquisition now
+  // degrades to the same safe `null` fallback as a query failure, instead
+  // of crashing the hop.
+  let client;
   try {
+    client = await batchPool.connect();
     await client.query("BEGIN");
     await client.query(`SET LOCAL statement_timeout = '${CANDIDATE_QUERY_TIMEOUT_MS}'`);
     const { rows } = await client.query<{ id: string; first_name: string | null }>(
@@ -229,11 +245,12 @@ async function pickNextMatchDrainCandidate(): Promise<{ id: string; first_name: 
     await client.query("COMMIT");
     return rows[0] ?? null;
   } catch (err) {
-    await client.query("ROLLBACK").catch(() => {});
+    // client may be undefined if batchPool.connect() itself is what failed
+    await client?.query("ROLLBACK").catch(() => {});
     console.error("[match-drain] pickNextMatchDrainCandidate failed:", err);
     return null; // safe: this hop finds nothing this time, next hop tries fresh
   } finally {
-    client.release();
+    client?.release();
   }
 }
 
