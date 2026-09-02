@@ -137,18 +137,41 @@ export function triggerMatchChain(userId: string): Promise<void> {
 // at 8-245 of 1,181 trails checked, weeks after their last sync, because
 // nothing had ever prompted their chain to run. The old cron sweep (5
 // users/day, 30 trails/user) was too slow to close that on its own — at
-// that rate a user needing 1,100+ trails would take over a month. This is
-// the proactive equivalent of description-chain.ts's backlog drain: cycles
-// through EVERY user with incomplete matching, not a capped handful, hop
-// after hop, until nothing's left.
-const DRAIN_HOP_BATCH_SIZE = 200;
-const DRAIN_HOP_TIME_BUDGET_MS = 45_000;
+// that rate a user needing 1,100+ trails would take over a month. This was
+// originally the proactive equivalent of description-chain.ts's backlog
+// drain: cycle through EVERY user with incomplete matching, hop after hop,
+// via self-dispatch to /api/internal/continue-match-drain, until nothing's
+// left.
+//
+// Self-dispatch chaining DISABLED, 2026-09-02 (see MATCH_DRAIN_CHAINING_ENABLED
+// below) — after three rounds of fixes (query cost, connection-acquisition,
+// then a dedicated matchBatchPool) still couldn't stop hops from dying on
+// "timeout exceeded when trying to connect" against Supabase's pooler, which
+// smelled like a project-level pooler/connection ceiling being hit by the
+// combined total of concurrently-running Vercel instances — not something
+// fixable by reshaping our own in-app pools further, and each failed hop was
+// a real risk to live traffic sharing that same pooler. Until that's
+// actually diagnosed (Supabase's own connection limit, concurrency patterns),
+// this now does ONE short batch per cron run and stops — no chaining, no
+// risk of a runaway hop sequence contending for connections. At current
+// backlog sizes (~400 stale pairs) even 20/day clears it in about three
+// weeks; this doesn't need to be fast, just not break anything else.
+const DRAIN_HOP_BATCH_SIZE = 30;
+const DRAIN_HOP_TIME_BUDGET_MS = 15_000;
+
+// Flip back to true once the underlying pooler-contention question above is
+// actually resolved — the chaining code itself (dispatchNextHop call and
+// MAX_DRAIN_HOPS backstop) is left in place, just unreachable while this is
+// false.
+const MATCH_DRAIN_CHAINING_ENABLED = false;
 
 // No daily budget cap here unlike the description drain — trail matching
 // doesn't spend a scarce external quota (Strava's rate limit), just DB/CPU
 // time, so there's no equivalent of reserveBackfillSlot to respect. Bounded
 // instead by a generous hop count purely as a backstop against a chain that
-// somehow never converges.
+// somehow never converges. Moot while MATCH_DRAIN_CHAINING_ENABLED is false
+// (every cron run is hop 0 and stops itself), kept for when chaining is
+// re-enabled.
 const MAX_DRAIN_HOPS = 300;
 
 // Least-recently-swept user first (own cron_match_sweep/client_match_batch
@@ -336,6 +359,13 @@ export async function runMatchDrainHop(hop = 0): Promise<void> {
   if (result.hadFailures) {
     console.warn(`[match-drain] Hop ${hop} hit failures — backing off before the next hop`);
     await sleep(5_000);
+  }
+
+  if (!MATCH_DRAIN_CHAINING_ENABLED) {
+    // See MATCH_DRAIN_CHAINING_ENABLED's comment above — one short batch per
+    // cron run, then stop, rather than self-dispatching to the next hop.
+    logSyncEvent(ADMIN_USER_ID, "match_drain_hop", { hop, outcome: "chaining_disabled" });
+    return;
   }
 
   // Whether or not this candidate's OWN backlog just finished, there may be
