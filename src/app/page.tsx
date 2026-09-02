@@ -1,4 +1,4 @@
-import InviteAccess from "./InviteAccess";
+import ConnectStrava from "./ConnectStrava";
 
 const steps = [
   {
@@ -99,7 +99,7 @@ function GetStartedLink() {
       href="#get-started"
       className="inline-block px-8 py-3.5 rounded-xl bg-[#C4652A] text-white font-semibold hover:bg-[#C4652A]/90 hover:-translate-y-0.5 active:translate-y-0 transition-all duration-200"
     >
-      Enter your invite code
+      Connect with Strava — free for 1 month
     </a>
   );
 }
@@ -109,7 +109,6 @@ const OAUTH_ERROR_MESSAGES: Record<string, string> = {
   invalid_state: "Your session expired before Strava could connect — please try again.",
   no_code: "Strava didn't send back the expected authorisation — please try again.",
   token_exchange_failed: "We couldn't complete the connection with Strava — please try again.",
-  invalid_invite: "That invite code isn't valid or has already been used.",
 };
 
 function ConnectErrorBanner({ error }: { error?: string }) {
@@ -177,21 +176,18 @@ export default function Home({
           </div>
 
           <h1 className="text-5xl sm:text-6xl lg:text-[5.25rem] font-extrabold text-[#2C2520] leading-[1.04] tracking-tight mb-6">
-            Track your progress<br />
-            across Britain&apos;s<br />
-            greatest trails
+            See how much of<br />
+            Britain&apos;s greatest trails<br />
+            you&apos;ve already completed
           </h1>
 
           <p className="text-[#8A7F72] text-lg md:text-xl max-w-lg mx-auto mb-10 leading-relaxed">
-            Connect your Strava account and discover how much of the UK&apos;s iconic long-distance paths
-            you&apos;ve already walked, run, or cycled — from the Pennine Way to the South Downs.
+            Connect your Strava account and My Trail Log automatically maps your progress across the
+            UK&apos;s National Trails and 1,000+ long-distance paths. No extra tracking needed — we match
+            your existing activities.
           </p>
 
-          <InviteAccess />
-
-          <p className="text-[#8A7F72]/50 text-xs mt-5 tracking-wide">
-            Free to use &nbsp;·&nbsp; Read-only access to your activities
-          </p>
+          <ConnectStrava />
         </div>
       </section>
 

@@ -63,6 +63,27 @@ interface Props {
   hasWriteScope: boolean;
   includeCycling: boolean;
   matchProgress: { totalChecked: number; totalTrails: number };
+  subscriptionStatus: "trial" | "active" | "expired";
+  trialEndsAt: Date | null;
+}
+
+// No paywall yet (tracking + countdown only, until Stripe is wired up —
+// see schema.sql's 2026-09-02 trial-tracking comment) — this is purely
+// display. 'active' (founding testers, and future paid subscribers) shows
+// nothing at all.
+function formatTrialStatus(
+  subscriptionStatus: "trial" | "active" | "expired",
+  trialEndsAt: Date | null
+): string | null {
+  if (subscriptionStatus === "active") return null;
+  if (!trialEndsAt) return null;
+
+  const msRemaining = new Date(trialEndsAt).getTime() - Date.now();
+  const daysRemaining = Math.ceil(msRemaining / (24 * 60 * 60 * 1000));
+
+  if (daysRemaining <= 0) return "Free trial · expired";
+  if (daysRemaining === 1) return "Free trial · 1 day remaining";
+  return `Free trial · ${daysRemaining} days remaining`;
 }
 
 function LogoIcon({ className }: { className?: string }) {
@@ -97,7 +118,9 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
 
 export default function DashboardClient({
   athlete, stats, trails, activityCount, autoSync, stravaDescriptionUpdates, descriptionMode, hasWriteScope, includeCycling, matchProgress,
+  subscriptionStatus, trialEndsAt,
 }: Props) {
+  const trialStatusText = formatTrialStatus(subscriptionStatus, trialEndsAt);
   const { unit, setUnit } = useDistanceUnit();
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "started">("all");
@@ -306,6 +329,11 @@ export default function DashboardClient({
                       </svg>
                       Connected
                     </span>
+                    {trialStatusText && (
+                      <span className="inline-flex items-center gap-1 bg-[#C4652A]/10 text-[#C4652A] text-[10px] font-semibold tracking-wider uppercase px-1.5 py-0.5 rounded-full">
+                        {trialStatusText}
+                      </span>
+                    )}
                   </div>
                   <p className="text-[#8A7F72] text-xs mt-0.5">{formatLastSynced(lastSyncedAt)}</p>
                 </div>

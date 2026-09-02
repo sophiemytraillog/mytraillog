@@ -388,6 +388,40 @@ CREATE TABLE IF NOT EXISTS waitlist (
   signed_up_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- ── Free-trial / subscription tracking ──────────────────────
+-- Added 2026-09-02 when the invite-code gate came off (app approved for
+-- 999 users) — every new signup now starts a 1-month free trial instead of
+-- needing a code. trial_started_at/trial_ends_at are set explicitly by the
+-- strava/callback INSERT (see upsertUserSql there), not by a column
+-- DEFAULT, so a returning user's ON CONFLICT DO UPDATE never touches them
+-- and a brand new row always gets an intentional value rather than
+-- whatever NOW() happens to be at ALTER-TABLE time.
+-- No paywall enforcement yet (item 5 of the 2026-09-02 request) — this is
+-- purely tracking + a dashboard countdown until Stripe is wired up.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_status TEXT NOT NULL DEFAULT 'trial';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_started_at    TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_ends_at       TIMESTAMPTZ;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'users_subscription_status_check'
+  ) THEN
+    ALTER TABLE users ADD CONSTRAINT users_subscription_status_check
+      CHECK (subscription_status IN ('trial', 'active', 'expired'));
+  END IF;
+END
+$$;
+
+-- One-time backfill for accounts that predate the trial system (the 10
+-- invite-only beta testers) — founding testers get permanent free access,
+-- not a trial. Guarded on trial_started_at IS NULL, which only a
+-- pre-trial-system row can ever have (every row inserted from here on sets
+-- it explicitly at signup) — safe to leave in as a no-op on every future
+-- migration run rather than needing to be deleted after first use.
+UPDATE users SET subscription_status = 'active'
+WHERE trial_started_at IS NULL AND subscription_status != 'active';
+
 -- ── Row-Level Security ──────────────────────────────────────
 -- The server connects as the postgres role which has BYPASSRLS in Supabase,
 -- so all server-side queries are unaffected. These settings block direct

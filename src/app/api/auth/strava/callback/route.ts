@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { query, pool } from "@/lib/db";
+import { query } from "@/lib/db";
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -72,11 +72,19 @@ export async function GET(request: NextRequest) {
     console.warn("[strava/callback] Detailed athlete fetch errored:", err);
   }
 
+  // subscription_status/trial_started_at/trial_ends_at only appear in the
+  // INSERT column list, not the ON CONFLICT SET clause below — deliberate,
+  // so a returning user reconnecting (token refresh, scope change, etc.)
+  // never has their trial clock reset or their founding-tester 'active'
+  // status touched. See schema.sql's trial-tracking comment (2026-09-02,
+  // when the invite-code gate came off).
   const upsertUserSql = `INSERT INTO users (
       strava_id, username, first_name, last_name, profile_image_url,
       strava_access_token, strava_refresh_token, strava_token_expires_at,
-      strava_scope, measurement_preference
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8), $9, $10)
+      strava_scope, measurement_preference,
+      subscription_status, trial_started_at, trial_ends_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8), $9, $10,
+      'trial', NOW(), NOW() + INTERVAL '1 month')
     ON CONFLICT (strava_id) DO UPDATE SET
       username                = EXCLUDED.username,
       first_name              = EXCLUDED.first_name,
@@ -102,71 +110,17 @@ export async function GET(request: NextRequest) {
     measurementPreference,
   ];
 
-  // Invite codes are only a gate for brand-new accounts — a returning
-  // tester reconnecting (token refresh, scope change, etc.) already has a
-  // strava_id on file and skips the requirement entirely.
-  const existingUser = await query<{ id: string }>(
-    "SELECT id FROM users WHERE strava_id = $1",
-    [athlete.id]
-  );
-  const isNewUser = existingUser.rows.length === 0;
-
+  // No invite-code gate anymore (removed 2026-09-02, app approved for 999
+  // users) — every Strava connect, new or returning, goes through the same
+  // plain upsert.
   let dbUserId: string | null = null;
-
-  if (isNewUser) {
-    const inviteCode = cookieStore.get("strava_invite_code")?.value ?? null;
-
-    if (!inviteCode) {
-      console.warn("[strava/callback] New user with no invite code, rejecting:", athlete.id);
-      return NextResponse.redirect(`${homeUrl}?error=invalid_invite`);
-    }
-
-    // Claim the code and create the account in one transaction: SELECT ...
-    // FOR UPDATE blocks a second concurrent claim of the same code until
-    // this commits, and re-checks used_by IS NULL once unblocked — so two
-    // people racing on the same code can't both get an account out of it.
-    const client = await pool.connect();
-    let codeValid = false;
-    try {
-      await client.query("BEGIN");
-      const codeResult = await client.query(
-        "SELECT code FROM invite_codes WHERE code = $1 AND used_by IS NULL FOR UPDATE",
-        [inviteCode]
-      );
-      codeValid = codeResult.rows.length > 0;
-
-      if (codeValid) {
-        const result = await client.query<{ id: string }>(upsertUserSql, upsertUserParams);
-        dbUserId = result.rows[0]?.id ?? null;
-        if (dbUserId) {
-          await client.query(
-            "UPDATE invite_codes SET used_by = $1, used_at = NOW() WHERE code = $2",
-            [dbUserId, inviteCode]
-          );
-        }
-      }
-      await client.query(codeValid ? "COMMIT" : "ROLLBACK");
-    } catch (err) {
-      await client.query("ROLLBACK");
-      console.error("[strava/callback] New-user signup transaction failed:", err);
-    } finally {
-      client.release();
-    }
-
-    if (!codeValid) {
-      console.warn("[strava/callback] Invite code invalid or already used:", inviteCode);
-      return NextResponse.redirect(`${homeUrl}?error=invalid_invite`);
-    }
-    console.log("[strava/callback] New user created via invite code. DB id:", dbUserId);
-  } else {
-    try {
-      const result = await query<{ id: string }>(upsertUserSql, upsertUserParams);
-      dbUserId = result.rows[0]?.id ?? null;
-      console.log("[strava/callback] Returning user upserted. DB id:", dbUserId);
-    } catch (err) {
-      // Log but don't block the auth flow — user can still reach the dashboard
-      console.error("[strava/callback] DB upsert failed:", err);
-    }
+  try {
+    const result = await query<{ id: string }>(upsertUserSql, upsertUserParams);
+    dbUserId = result.rows[0]?.id ?? null;
+    console.log("[strava/callback] User upserted. DB id:", dbUserId);
+  } catch (err) {
+    // Log but don't block the auth flow — user can still reach the dashboard
+    console.error("[strava/callback] DB upsert failed:", err);
   }
 
   const response = NextResponse.redirect(new URL("/dashboard?autoSync=true", request.url));

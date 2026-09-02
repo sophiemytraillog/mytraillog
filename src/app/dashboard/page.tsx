@@ -51,6 +51,8 @@ export default async function Dashboard({
   let stravaScope: string | null = null;
   let includeCycling = false;
   let staleSync = false;
+  let subscriptionStatus: "trial" | "active" | "expired" = "trial";
+  let trialEndsAt: Date | null = null;
   if (userId) {
     try {
       const result = await query<
@@ -60,6 +62,8 @@ export default async function Dashboard({
           strava_scope: string | null;
           include_cycling: boolean;
           stale_sync: boolean;
+          subscription_status: "trial" | "active" | "expired";
+          trial_ends_at: Date | null;
         }
       >(
         `SELECT u.last_synced_at,
@@ -71,12 +75,15 @@ export default async function Dashboard({
                 (u.sync_status = 'syncing'
                   AND u.sync_progress_at < NOW() - INTERVAL '${STALE_SYNC_THRESHOLD_MINUTES} minutes'
                 ) AS stale_sync,
+                u.subscription_status,
+                u.trial_ends_at,
                 COUNT(a.id)::text AS activity_count
          FROM users u
          LEFT JOIN activities a ON a.user_id = u.id
          WHERE u.id = $1
          GROUP BY u.last_synced_at, u.sync_status, u.strava_description_updates,
-                  u.description_mode, u.strava_scope, u.include_cycling, u.sync_progress_at`,
+                  u.description_mode, u.strava_scope, u.include_cycling, u.sync_progress_at,
+                  u.subscription_status, u.trial_ends_at`,
         [userId]
       );
       stats = result.rows[0] ?? null;
@@ -85,6 +92,8 @@ export default async function Dashboard({
       stravaScope = result.rows[0]?.strava_scope ?? null;
       includeCycling = result.rows[0]?.include_cycling ?? false;
       staleSync = result.rows[0]?.stale_sync ?? false;
+      subscriptionStatus = result.rows[0]?.subscription_status ?? "trial";
+      trialEndsAt = result.rows[0]?.trial_ends_at ?? null;
     } catch (err) {
       console.error("[dashboard] Failed to load stats:", err);
     }
@@ -186,6 +195,8 @@ export default async function Dashboard({
       hasWriteScope={stravaScope?.includes("activity:write") ?? false}
       includeCycling={includeCycling}
       matchProgress={matchProgress}
+      subscriptionStatus={subscriptionStatus}
+      trialEndsAt={trialEndsAt}
     />
   );
 }
