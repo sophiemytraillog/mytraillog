@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { pool } from "@/lib/db";
 import { sendNotificationEmail } from "@/lib/email";
+import { runTrialLifecycleCheck } from "@/lib/trial-lifecycle";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -160,12 +161,38 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  // 6. Trial lifecycle — reminders, trial -> grace_period transitions,
+  // grace_period final warnings, and 14-day-expired cleanup (Strava
+  // deauth + account deletion). See trial-lifecycle.ts. This is the one
+  // check here that isn't read-only: it sends emails and can delete
+  // accounts, same "part of the daily health-check cron" placement asked
+  // for in the 2026-09-16 request (item 6) rather than a separate cron —
+  // Vercel Hobby only allows two daily crons (see vercel.json) and this
+  // one already runs after resume-stuck-syncs each night.
+  let trialSummaryLines: string[] = [];
+  try {
+    const trial = await runTrialLifecycleCheck();
+    trialSummaryLines = trial.summaryLines;
+    console.log(`[internal/health-check] Trial lifecycle: ${trial.summaryLines.join(" ")}`);
+  } catch (err) {
+    console.error("[internal/health-check] Trial lifecycle check failed:", err);
+    issues.push(`Trial lifecycle check threw an error: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   const healthy = issues.length === 0;
   console.log(`[internal/health-check] ${healthy ? "All clear" : `${issues.length} issue(s) found`}`);
 
-  if (!healthy) {
-    await sendNotificationEmail(`My Trail Log health check — ${issues.length} issue(s) found`, issues);
+  // Status-counts line always appears whenever the email actually sends, so
+  // it's included even on an otherwise-healthy day where a trial reminder
+  // or cleanup happened — but a quiet day with zero issues AND zero trial
+  // activity still sends nothing, same as before this check existed.
+  const trialHadActivity = trialSummaryLines.length > 1; // index 0 is always the status-counts line
+  if (!healthy || trialHadActivity) {
+    await sendNotificationEmail(
+      `My Trail Log health check — ${issues.length} issue(s) found`,
+      [...issues, ...trialSummaryLines]
+    );
   }
 
-  return NextResponse.json({ healthy, issueCount: issues.length, issues });
+  return NextResponse.json({ healthy, issueCount: issues.length, issues, trial: trialSummaryLines });
 }

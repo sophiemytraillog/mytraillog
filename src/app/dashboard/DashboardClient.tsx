@@ -52,6 +52,8 @@ interface UserStats {
 
 type DescriptionMode = "full" | "new_only" | "new_with_totals";
 
+type SubscriptionStatus = "trial" | "active" | "expired" | "grace_period";
+
 interface Props {
   athlete: Athlete;
   stats: UserStats | null;
@@ -63,27 +65,61 @@ interface Props {
   hasWriteScope: boolean;
   includeCycling: boolean;
   matchProgress: { totalChecked: number; totalTrails: number };
-  subscriptionStatus: "trial" | "active" | "expired";
+  subscriptionStatus: SubscriptionStatus;
   trialEndsAt: Date | null;
+  contactEmail: string | null;
 }
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+// Mirrors GRACE_PERIOD_DAYS worth of logic in trial-lifecycle.ts — grace
+// period runs 14 days from trial_ends_at, ending in account deletion.
+const GRACE_PERIOD_DAYS = 14;
 
 // No paywall yet (tracking + countdown only, until Stripe is wired up —
 // see schema.sql's 2026-09-02 trial-tracking comment) — this is purely
 // display. 'active' (founding testers, and future paid subscribers) shows
-// nothing at all.
-function formatTrialStatus(
-  subscriptionStatus: "trial" | "active" | "expired",
-  trialEndsAt: Date | null
-): string | null {
-  if (subscriptionStatus === "active") return null;
+// nothing at all. Only covers 'trial' — grace_period gets its own more
+// prominent banner (see GracePeriodBanner below) instead of this small pill.
+function formatTrialStatus(subscriptionStatus: SubscriptionStatus, trialEndsAt: Date | null): string | null {
+  if (subscriptionStatus !== "trial") return null;
   if (!trialEndsAt) return null;
 
   const msRemaining = new Date(trialEndsAt).getTime() - Date.now();
-  const daysRemaining = Math.ceil(msRemaining / (24 * 60 * 60 * 1000));
+  const daysRemaining = Math.ceil(msRemaining / DAY_MS);
 
   if (daysRemaining <= 0) return "Free trial · expired";
   if (daysRemaining === 1) return "Free trial · 1 day remaining";
   return `Free trial · ${daysRemaining} days remaining`;
+}
+
+// Days until trial-lifecycle.ts's cron cleanup actually deletes the account
+// (14 days after trial_ends_at, which is also when grace_period started).
+function daysUntilRemoval(trialEndsAt: Date | null): number {
+  if (!trialEndsAt) return GRACE_PERIOD_DAYS;
+  const removalAt = new Date(trialEndsAt).getTime() + GRACE_PERIOD_DAYS * DAY_MS;
+  return Math.max(0, Math.ceil((removalAt - Date.now()) / DAY_MS));
+}
+
+// Shown for ALL grace_period users regardless of whether they've provided a
+// contact_email (unlike the reminder emails, which are email-gated — see
+// trial-lifecycle.ts) — this is the one warning every such user is
+// guaranteed to actually see.
+function GracePeriodBanner({ trialEndsAt }: { trialEndsAt: Date | null }) {
+  const days = daysUntilRemoval(trialEndsAt);
+  return (
+    <div className="bg-[#C4652A] text-white rounded-2xl px-5 py-4 mb-4 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
+      <p className="text-sm font-medium flex-1 leading-snug">
+        Your free trial has ended. Subscribe to keep tracking — your data will be removed in{" "}
+        {days} {days === 1 ? "day" : "days"}.
+      </p>
+      <a
+        href="mailto:mytrailloguk@gmail.com?subject=Subscribe%20to%20My%20Trail%20Log"
+        className="shrink-0 px-4 py-2 rounded-lg bg-white text-[#C4652A] text-sm font-semibold hover:bg-white/90 transition-colors text-center"
+      >
+        Subscribe
+      </a>
+    </div>
+  );
 }
 
 function LogoIcon({ className }: { className?: string }) {
@@ -118,7 +154,7 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
 
 export default function DashboardClient({
   athlete, stats, trails, activityCount, autoSync, stravaDescriptionUpdates, descriptionMode, hasWriteScope, includeCycling, matchProgress,
-  subscriptionStatus, trialEndsAt,
+  subscriptionStatus, trialEndsAt, contactEmail,
 }: Props) {
   const trialStatusText = formatTrialStatus(subscriptionStatus, trialEndsAt);
   const { unit, setUnit } = useDistanceUnit();
@@ -133,9 +169,37 @@ export default function DashboardClient({
   const [savingMode, setSavingMode] = useState(false);
   const [cyclingEnabled, setCyclingEnabled] = useState(includeCycling);
   const [savingCycling, setSavingCycling] = useState(false);
+  const [email, setEmail] = useState(contactEmail ?? "");
+  const [savingEmail, setSavingEmail] = useState(false);
+  const [emailStatus, setEmailStatus] = useState<"idle" | "saved" | "error">("idle");
   const [backfillStatus, setBackfillStatus] = useState<string | null>(null);
   const [requestModalName, setRequestModalName] = useState<string | null>(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+
+  const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  async function saveContactEmail(e: React.FormEvent) {
+    e.preventDefault();
+    const trimmed = email.trim();
+    if (!EMAIL_PATTERN.test(trimmed)) {
+      setEmailStatus("error");
+      return;
+    }
+    setSavingEmail(true);
+    setEmailStatus("idle");
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contact_email: trimmed }),
+      });
+      setEmailStatus(res.ok ? "saved" : "error");
+    } catch {
+      setEmailStatus("error");
+    } finally {
+      setSavingEmail(false);
+    }
+  }
 
   async function toggleDescriptionUpdates(enabled: boolean) {
     setSavingPref(true);
@@ -274,6 +338,8 @@ export default function DashboardClient({
       </nav>
 
       <div className="flex-1 px-4 py-4 sm:px-6 sm:py-6 max-w-7xl mx-auto w-full">
+
+        {subscriptionStatus === "grace_period" && <GracePeriodBanner trialEndsAt={trialEndsAt} />}
 
         {/* Stat row — National Trails + Other Trails */}
         <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:gap-4">
@@ -469,6 +535,45 @@ export default function DashboardClient({
                     </button>
                   ))}
                 </div>
+              </div>
+
+              {/* Contact email — used for trial reminder/expiry notices
+                  only (see trial-lifecycle.ts); Strava never gives us an
+                  athlete's email. Same field the pre-dashboard /activate
+                  gate collects; this is just where to update it later. */}
+              <div className="mt-3 pt-3 border-t border-[#E5DED4]">
+                <form onSubmit={saveContactEmail} className="flex flex-col gap-1.5">
+                  <label htmlFor="contact-email-setting" className="text-xs font-medium text-[#2C2520]">
+                    Contact email
+                  </label>
+                  <div className="flex gap-1.5">
+                    <input
+                      id="contact-email-setting"
+                      type="email"
+                      value={email}
+                      onChange={(e) => {
+                        setEmail(e.target.value);
+                        setEmailStatus("idle");
+                      }}
+                      placeholder="you@example.com"
+                      className="flex-1 min-w-0 text-xs px-2.5 py-1.5 rounded-lg border border-[#E5DED4] bg-white text-[#2C2520] focus:outline-none focus:ring-2 focus:ring-[#C4652A]/40 disabled:opacity-50"
+                    />
+                    <button
+                      type="submit"
+                      disabled={savingEmail}
+                      className="shrink-0 px-3 py-1.5 rounded-lg bg-[#2C2520] text-white text-xs font-medium hover:bg-[#2C2520]/90 transition-colors disabled:opacity-50"
+                    >
+                      {savingEmail ? "Saving…" : "Save"}
+                    </button>
+                  </div>
+                  <p className="text-[#8A7F72]/70 text-[10px] leading-relaxed">
+                    We&apos;ll only use this for account notifications — no spam.
+                  </p>
+                  {emailStatus === "saved" && <p className="text-[#4A7C59] text-[10px]">Saved.</p>}
+                  {emailStatus === "error" && (
+                    <p className="text-[#C4652A] text-[10px]">Please enter a valid email address.</p>
+                  )}
+                </form>
               </div>
 
               {/* Account deletion — deliberately understated: red text only,

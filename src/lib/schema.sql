@@ -402,16 +402,13 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_status TEXT NOT NULL DEF
 ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_started_at    TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_ends_at       TIMESTAMPTZ;
 
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'users_subscription_status_check'
-  ) THEN
-    ALTER TABLE users ADD CONSTRAINT users_subscription_status_check
-      CHECK (subscription_status IN ('trial', 'active', 'expired'));
-  END IF;
-END
-$$;
+-- 'grace_period' added 2026-09-16 (see trial-expiry-handling comment
+-- below) — dropped and recreated rather than guarded with IF NOT EXISTS
+-- since the allowed set itself changed, not just its presence. Cheap
+-- metadata-only operation, safe to rerun every migration.
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_subscription_status_check;
+ALTER TABLE users ADD CONSTRAINT users_subscription_status_check
+  CHECK (subscription_status IN ('trial', 'active', 'expired', 'grace_period'));
 
 -- One-time backfill for accounts that predate the trial system (the 10
 -- invite-only beta testers) — founding testers get permanent free access,
@@ -421,6 +418,18 @@ $$;
 -- migration run rather than needing to be deleted after first use.
 UPDATE users SET subscription_status = 'active'
 WHERE trial_started_at IS NULL AND subscription_status != 'active';
+
+-- ── Trial expiry handling (2026-09-16) ───────────────────────
+-- contact_email is deliberately separate from anything Strava gives us
+-- (Strava doesn't expose the athlete's email at all) — collected explicitly
+-- so trial-lifecycle reminders/expiry notices have somewhere to go. Nullable
+-- at the DB level: a user can reach the dashboard's email-activation gate
+-- (see /activate) without one for a moment mid-signup, and the 10 existing
+-- 'active' beta testers are never required to supply one. Reminder emails
+-- are simply skipped for anyone with contact_email NULL (see
+-- trial-lifecycle.ts) — the grace_period -> deletion cleanup itself is NOT
+-- conditional on having an email, only the courtesy reminders are.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_email TEXT;
 
 -- ── Row-Level Security ──────────────────────────────────────
 -- The server connects as the postgres role which has BYPASSRLS in Supabase,

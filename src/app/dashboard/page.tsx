@@ -51,8 +51,9 @@ export default async function Dashboard({
   let stravaScope: string | null = null;
   let includeCycling = false;
   let staleSync = false;
-  let subscriptionStatus: "trial" | "active" | "expired" = "trial";
+  let subscriptionStatus: "trial" | "active" | "expired" | "grace_period" = "trial";
   let trialEndsAt: Date | null = null;
+  let contactEmail: string | null = null;
   if (userId) {
     try {
       const result = await query<
@@ -62,8 +63,9 @@ export default async function Dashboard({
           strava_scope: string | null;
           include_cycling: boolean;
           stale_sync: boolean;
-          subscription_status: "trial" | "active" | "expired";
+          subscription_status: "trial" | "active" | "expired" | "grace_period";
           trial_ends_at: Date | null;
+          contact_email: string | null;
         }
       >(
         `SELECT u.last_synced_at,
@@ -77,13 +79,14 @@ export default async function Dashboard({
                 ) AS stale_sync,
                 u.subscription_status,
                 u.trial_ends_at,
+                u.contact_email,
                 COUNT(a.id)::text AS activity_count
          FROM users u
          LEFT JOIN activities a ON a.user_id = u.id
          WHERE u.id = $1
          GROUP BY u.last_synced_at, u.sync_status, u.strava_description_updates,
                   u.description_mode, u.strava_scope, u.include_cycling, u.sync_progress_at,
-                  u.subscription_status, u.trial_ends_at`,
+                  u.subscription_status, u.trial_ends_at, u.contact_email`,
         [userId]
       );
       stats = result.rows[0] ?? null;
@@ -94,9 +97,23 @@ export default async function Dashboard({
       staleSync = result.rows[0]?.stale_sync ?? false;
       subscriptionStatus = result.rows[0]?.subscription_status ?? "trial";
       trialEndsAt = result.rows[0]?.trial_ends_at ?? null;
+      contactEmail = result.rows[0]?.contact_email ?? null;
     } catch (err) {
       console.error("[dashboard] Failed to load stats:", err);
     }
+  }
+
+  // Blocking gate: trial/grace_period accounts without a contact_email on
+  // file get sent to /activate instead of the dashboard — Strava never
+  // exposes an athlete's email, and trial-lifecycle.ts's reminder/expiry
+  // emails have nowhere to go without one. 'active' accounts (the 10
+  // founding beta testers) never hit this.
+  if (
+    userId &&
+    !contactEmail &&
+    (subscriptionStatus === "trial" || subscriptionStatus === "grace_period")
+  ) {
+    redirect("/activate");
   }
 
   // Self-heal nudge: resume automatically on this visit if the last sync
@@ -197,6 +214,7 @@ export default async function Dashboard({
       matchProgress={matchProgress}
       subscriptionStatus={subscriptionStatus}
       trialEndsAt={trialEndsAt}
+      contactEmail={contactEmail}
     />
   );
 }
