@@ -1,4 +1,4 @@
-import { batchPool } from "@/lib/db";
+import { matchBatchPool } from "@/lib/db";
 import { matchNextBatch, STALE_CHECK_BBOX_DEGREES } from "@/lib/match-trails";
 import { logSyncEvent } from "@/lib/sync-log";
 import { CHAIN_DISPATCH_ORIGIN } from "@/lib/chain-origin";
@@ -197,7 +197,7 @@ const MAX_DRAIN_HOPS = 300;
 const CANDIDATE_QUERY_TIMEOUT_MS = 10_000;
 
 async function pickNextMatchDrainCandidate(): Promise<{ id: string; first_name: string | null } | null> {
-  // batchPool, not the shared `pool` — this picker runs every hop of an
+  // matchBatchPool, not the shared `pool` — this picker runs every hop of an
   // unattended sweep, same reasoning as matchNextBatch's own connection a
   // few lines down. Root cause this exists to fix (2026-09-01): it used to
   // grab a connection from the shared `pool` (max 3 in production, shared
@@ -212,9 +212,20 @@ async function pickNextMatchDrainCandidate(): Promise<{ id: string; first_name: 
   // Moving the connect() inside try/catch means a failed acquisition now
   // degrades to the same safe `null` fallback as a query failure, instead
   // of crashing the hop.
+  //
+  // Second root cause (2026-09-02): moving this to the single shared
+  // batchPool didn't fully fix it either — that pool was ALSO used by the
+  // description drain, which by then had become a near-continuous poller
+  // (cron-job.org hitting /api/internal/drain-batch every ~2 minutes), so it
+  // permanently occupied the one available connection and starved this
+  // picker and matchNextBatch's own writes out the same way, just from a
+  // different cause: "timeout exceeded when trying to connect" from both
+  // sides, and match_drain_hop hops still dying silently after "started".
+  // Split into its own dedicated matchBatchPool (see db.ts) so the two
+  // drains can never starve each other.
   let client;
   try {
-    client = await batchPool.connect();
+    client = await matchBatchPool.connect();
     await client.query("BEGIN");
     await client.query(`SET LOCAL statement_timeout = '${CANDIDATE_QUERY_TIMEOUT_MS}'`);
     const { rows } = await client.query<{ id: string; first_name: string | null }>(
@@ -245,7 +256,7 @@ async function pickNextMatchDrainCandidate(): Promise<{ id: string; first_name: 
     await client.query("COMMIT");
     return rows[0] ?? null;
   } catch (err) {
-    // client may be undefined if batchPool.connect() itself is what failed
+    // client may be undefined if matchBatchPool.connect() itself is what failed
     await client?.query("ROLLBACK").catch(() => {});
     console.error("[match-drain] pickNextMatchDrainCandidate failed:", err);
     return null; // safe: this hop finds nothing this time, next hop tries fresh
@@ -275,16 +286,18 @@ export async function runMatchDrainHop(hop = 0): Promise<void> {
 
   let result;
   try {
-    // batchPool, not the shared `pool` — this sweep runs unattended across
-    // every user in the account and can take hundreds of hops. Root cause
-    // this exists to fix (2026-08-22): running on the shared pool, this drain
-    // and the description drain below competed with the Strava webhook for
-    // the same handful of Supabase pooler slots, and a live user's real-time
-    // activity sync silently lost the race (webhook/strava's handleNewActivity
-    // failed with an unlogged connection error — see the fix there). batchPool
-    // has its own small `max` specifically so this can never crowd out
+    // matchBatchPool, not the shared `pool` — this sweep runs unattended
+    // across every user in the account and can take hundreds of hops. Root
+    // cause this exists to fix (2026-08-22): running on the shared pool,
+    // this drain and the description drain competed with the Strava webhook
+    // for the same handful of Supabase pooler slots, and a live user's
+    // real-time activity sync silently lost the race (webhook/strava's
+    // handleNewActivity failed with an unlogged connection error — see the
+    // fix there). Its own dedicated pool (split from a single shared
+    // batchPool on 2026-09-02, see db.ts) means neither this nor the
+    // description drain can starve each other, on top of never crowding out
     // latency-sensitive requests.
-    result = await matchNextBatch(candidate.id, DRAIN_HOP_BATCH_SIZE, DRAIN_HOP_TIME_BUDGET_MS, batchPool);
+    result = await matchNextBatch(candidate.id, DRAIN_HOP_BATCH_SIZE, DRAIN_HOP_TIME_BUDGET_MS, matchBatchPool);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[match-drain] Batch failed for ${candidate.first_name ?? candidate.id} at hop ${hop}:`, err);
@@ -310,7 +323,7 @@ export async function runMatchDrainHop(hop = 0): Promise<void> {
   );
 
   // Back off before the next hop if this one hit real failures — a signal
-  // the pool is under pressure (batchPool's own small `max` filling up, or
+  // the pool is under pressure (matchBatchPool's own small `max` filling up, or
   // Supabase's pooler itself near its session cap) rather than one-off bad
   // luck on a single trail. Pausing here gives that pressure a chance to
   // clear instead of the drain immediately dispatching another hop and

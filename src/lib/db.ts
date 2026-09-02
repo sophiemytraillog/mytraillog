@@ -1,7 +1,11 @@
 import { Pool, QueryResultRow } from "pg";
 
 // Singleton pool — prevents exhausting connections during Next.js hot reloads
-const globalForPg = globalThis as unknown as { _pgPool?: Pool; _pgBatchPool?: Pool };
+const globalForPg = globalThis as unknown as {
+  _pgPool?: Pool;
+  _pgDescriptionBatchPool?: Pool;
+  _pgMatchBatchPool?: Pool;
+};
 
 // REVERTED: a locally-reproduced "self-signed certificate in certificate
 // chain" issue with connectionString looked like a real bug (see git
@@ -50,36 +54,60 @@ if (process.env.NODE_ENV !== "production") {
   globalForPg._pgPool = pool;
 }
 
-// Separate, deliberately small pool for unattended background sweeps — the
-// daily trail-match drain and description-backlog drain (see match-chain.ts's
-// runMatchDrainHop and description-chain.ts's runBacklogDrainHop). Root cause
-// this exists to fix (2026-08-22): those sweeps run continuously across every
-// user in the account, and Supabase's pooler has a hard session-count ceiling
-// shared by everything hitting it. Giving them their own pool with a small
-// `max` means they can never claim more than a couple of slots no matter how
-// long they run, guaranteeing `pool` — used by the Strava webhook and other
-// live, user-facing requests — always has room. connectionTimeoutMillis is
-// generously long here for the same reason: a background sweep can afford to
-// wait several seconds for a free connection; a webhook response can't.
-export const batchPool =
-  globalForPg._pgBatchPool ??
-  new Pool({
+// Separate, deliberately small pools for unattended background sweeps — the
+// description-backlog drain (description-chain.ts's runBacklogDrainHop and
+// runExternalDrainBatch) and the trail-match drain (match-chain.ts's
+// runMatchDrainHop). Root cause this exists to fix (2026-08-22): those sweeps
+// run continuously across every user in the account, and Supabase's pooler
+// has a hard session-count ceiling shared by everything hitting it. Giving
+// them their own pool with a small `max` means they can never claim more
+// than a couple of slots no matter how long they run, guaranteeing `pool` —
+// used by the Strava webhook and other live, user-facing requests — always
+// has room. connectionTimeoutMillis is generously long here for the same
+// reason: a background sweep can afford to wait several seconds for a free
+// connection; a webhook response can't.
+//
+// Originally a single shared `batchPool` covered both drains. Split into two
+// on 2026-09-02 after the description drain became a near-continuous poller
+// (cron-job.org hitting /api/internal/drain-batch every ~2 minutes, not once
+// a day — see drain-batch's own history) and started permanently occupying
+// the one shared connection, starving the match drain out: confirmed via
+// "timeout exceeded when trying to connect" errors from BOTH sides
+// (match-trails' per-trail write, and external-drain's own batch call) and
+// match_drain_hop hops logging "started" and then nothing at all as the
+// whole function hung waiting for a connection that never freed up. Each
+// drain now has its own single-connection pool, so neither can starve the
+// other no matter how busy either one is.
+function makeBatchPool() {
+  return new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: { rejectUnauthorized: false },
     max: process.env.NODE_ENV === "production" ? 1 : 3,
     idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 20_000,
   });
-
-const isNewBatchPool = !globalForPg._pgBatchPool;
-if (isNewBatchPool) {
-  batchPool.on("error", (err) => {
-    console.error("[db] Idle batch-pool client error:", err.message);
-  });
 }
 
+export const descriptionBatchPool = globalForPg._pgDescriptionBatchPool ?? makeBatchPool();
+const isNewDescriptionBatchPool = !globalForPg._pgDescriptionBatchPool;
+if (isNewDescriptionBatchPool) {
+  descriptionBatchPool.on("error", (err) => {
+    console.error("[db] Idle description-batch-pool client error:", err.message);
+  });
+}
 if (process.env.NODE_ENV !== "production") {
-  globalForPg._pgBatchPool = batchPool;
+  globalForPg._pgDescriptionBatchPool = descriptionBatchPool;
+}
+
+export const matchBatchPool = globalForPg._pgMatchBatchPool ?? makeBatchPool();
+const isNewMatchBatchPool = !globalForPg._pgMatchBatchPool;
+if (isNewMatchBatchPool) {
+  matchBatchPool.on("error", (err) => {
+    console.error("[db] Idle match-batch-pool client error:", err.message);
+  });
+}
+if (process.env.NODE_ENV !== "production") {
+  globalForPg._pgMatchBatchPool = matchBatchPool;
 }
 
 export async function query<T extends QueryResultRow = QueryResultRow>(

@@ -1,4 +1,4 @@
-import { pool, batchPool } from "@/lib/db";
+import { pool, descriptionBatchPool } from "@/lib/db";
 import { processDescriptionBatch } from "@/lib/trail-descriptions";
 import { CHAIN_DISPATCH_ORIGIN } from "@/lib/chain-origin";
 import { logSyncEvent } from "@/lib/sync-log";
@@ -226,12 +226,13 @@ export async function runBacklogDrainHop(hop = 0): Promise<void> {
 
   let result;
   try {
-    // batchPool, not the shared `pool` — same fix as match-chain.ts's
+    // descriptionBatchPool, not the shared `pool` — same fix as match-chain.ts's
     // runMatchDrainHop, and for the same reason: this sweep runs unattended
     // across every user with pending backlog and previously competed with
-    // the Strava webhook for the same limited Supabase pooler slots. See the
-    // comment there for the full root-cause writeup (2026-08-22).
-    result = await processDescriptionBatch(candidate.id, DRAIN_HOP_TIME_BUDGET_MS, "cron-drain", batchPool);
+    // the Strava webhook for the same limited Supabase pooler slots. Its own
+    // dedicated pool (split from a single shared batchPool on 2026-09-02, see
+    // db.ts) so it can't starve or be starved by the match drain either.
+    result = await processDescriptionBatch(candidate.id, DRAIN_HOP_TIME_BUDGET_MS, "cron-drain", descriptionBatchPool);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[description-drain] Batch failed for ${candidate.first_name ?? candidate.id} at hop ${hop}:`, err);
@@ -354,7 +355,7 @@ export async function runExternalDrainBatch(): Promise<ExternalDrainBatchResult>
 
     let result;
     try {
-      result = await processDescriptionBatch(candidate.id, remaining, "external-drain", batchPool);
+      result = await processDescriptionBatch(candidate.id, remaining, "external-drain", descriptionBatchPool);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[external-drain] Batch failed for ${candidate.first_name ?? candidate.id}:`, err);

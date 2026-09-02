@@ -472,7 +472,7 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number) {
     // proximity insert above succeeded) but computeTrailProgress never
     // completed — most likely starved of a DB connection by the background
     // match/description drains hitting the same pooler limit (see
-    // batchPool in db.ts, added alongside this fix) — and the activity sat
+    // the batch pools in db.ts, added alongside this fix) — and the activity sat
     // with no progress, no description, and zero record that anything had
     // gone wrong. Only possible once we know who this is for (a failure
     // before the user lookup above has nothing to log against or retry).
