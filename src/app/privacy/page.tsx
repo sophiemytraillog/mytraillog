@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Privacy Policy — My Trail Log",
+  title: "Privacy Policy - My Trail Log",
 };
 
 function LogoIcon({ className }: { className?: string }) {
@@ -65,9 +65,9 @@ export default function PrivacyPage() {
           <Section title="Data we collect">
             <p>When you connect your Strava account we request read access to your activities. We store the following:</p>
             <ul className="list-disc list-inside space-y-1.5 pl-2">
-              <li><span className="font-medium text-[#2C2520]">Strava profile information</span> — your name, Strava username, and profile picture URL, so we can display your account in the dashboard.</li>
-              <li><span className="font-medium text-[#2C2520]">Activity metadata</span> — the name, type (run, walk, hike, etc.), date, and distance of each activity.</li>
-              <li><span className="font-medium text-[#2C2520]">GPS route data</span> — the encoded polyline of each activity, which we decode into a geometry stored in our database. This is the GPS trace of where you went.</li>
+              <li><span className="font-medium text-[#2C2520]">Strava profile information</span> - your name, Strava username, and profile picture URL, so we can display your account in the dashboard.</li>
+              <li><span className="font-medium text-[#2C2520]">Activity metadata</span> - the name, type (run, walk, hike, etc.), date, and distance of each activity.</li>
+              <li><span className="font-medium text-[#2C2520]">GPS route data</span> - the encoded polyline of each activity, which we decode into a geometry stored in our database. This is the GPS trace of where you went.</li>
             </ul>
             <p>
               We do not collect your heart rate, power data, photos, comments, kudos, or any other
@@ -106,13 +106,13 @@ export default function PrivacyPage() {
             <p>
               You can withdraw consent at any time by disconnecting My Trail Log from your Strava account
               in <a href="https://www.strava.com/settings/apps" target="_blank" rel="noopener noreferrer" className="text-[#C4652A] underline hover:no-underline">Strava&apos;s connected apps settings</a>,
-              which deletes your data immediately and automatically (see below) — no separate request needed.
+              which deletes your data immediately and automatically (see below) - no separate request needed.
             </p>
           </Section>
 
           <Section title="How long we keep your data">
             <p>
-              We retain your data for as long as your account is active — that is, as long as you continue
+              We retain your data for as long as your account is active - that is, as long as you continue
               to use the service. If you have not logged in or synced your activities for 12 months, we
               may delete your account and associated data.
             </p>
@@ -121,8 +121,8 @@ export default function PrivacyPage() {
               <a href="https://www.strava.com/settings/apps" target="_blank" rel="noopener noreferrer" className="text-[#C4652A] underline hover:no-underline">
                 Strava&apos;s connected apps settings
               </a>{" "}
-              — or use the <span className="font-medium text-[#2C2520]">Disconnect &amp; Delete My Data</span> button
-              in the app — your data is deleted <span className="font-medium text-[#2C2520]">immediately and automatically</span>.
+              - or use the <span className="font-medium text-[#2C2520]">Disconnect &amp; Delete My Data</span> button
+              in the app - your data is deleted <span className="font-medium text-[#2C2520]">immediately and automatically</span>.
               There is no waiting period and no separate request needed for this path.
             </p>
             <p>
@@ -141,8 +141,8 @@ export default function PrivacyPage() {
             </p>
             <p>Your data is processed by the following sub-processors solely to operate the service:</p>
             <ul className="list-disc list-inside space-y-1.5 pl-2">
-              <li><span className="font-medium text-[#2C2520]">Supabase</span> — our database host (PostgreSQL, hosted in the EU). Your GPS and activity data is stored here.</li>
-              <li><span className="font-medium text-[#2C2520]">Strava</span> — the source of your data. We interact with the Strava API to read your activities. Strava&apos;s own privacy policy governs your relationship with Strava.</li>
+              <li><span className="font-medium text-[#2C2520]">Supabase</span> - our database host (PostgreSQL, hosted in the EU). Your GPS and activity data is stored here.</li>
+              <li><span className="font-medium text-[#2C2520]">Strava</span> - the source of your data. We interact with the Strava API to read your activities. Strava&apos;s own privacy policy governs your relationship with Strava.</li>
             </ul>
             <p>
               We do not use Google Analytics, Meta Pixel, or any other third-party tracking or advertising services.
@@ -154,11 +154,11 @@ export default function PrivacyPage() {
             <ul className="list-disc list-inside space-y-1.5 pl-2">
               <li>
                 <span className="font-mono text-xs bg-[#EAE4DA] px-1.5 py-0.5 rounded text-[#2C2520]">strava_user_id</span>
-                {" "}— stores your internal user ID to keep you logged in across page loads.
+                {" "}- stores your internal user ID to keep you logged in across page loads.
               </li>
               <li>
                 <span className="font-mono text-xs bg-[#EAE4DA] px-1.5 py-0.5 rounded text-[#2C2520]">strava_athlete</span>
-                {" "}— caches your Strava profile name and avatar so the dashboard loads quickly without an API call.
+                {" "}- caches your Strava profile name and avatar so the dashboard loads quickly without an API call.
               </li>
             </ul>
             <p>
@@ -172,8 +172,8 @@ export default function PrivacyPage() {
             <ul className="list-disc list-inside space-y-1.5 pl-2">
               <li><span className="font-medium text-[#2C2520]">Access</span> the personal data we hold about you.</li>
               <li><span className="font-medium text-[#2C2520]">Rectification</span> of inaccurate data (though most data comes directly from Strava).</li>
-              <li><span className="font-medium text-[#2C2520]">Erasure</span> — request that we delete your account and all associated data.</li>
-              <li><span className="font-medium text-[#2C2520]">Portability</span> — receive a copy of your data in a machine-readable format.</li>
+              <li><span className="font-medium text-[#2C2520]">Erasure</span> - request that we delete your account and all associated data.</li>
+              <li><span className="font-medium text-[#2C2520]">Portability</span> - receive a copy of your data in a machine-readable format.</li>
               <li><span className="font-medium text-[#2C2520]">Withdraw consent</span> at any time, which will not affect the lawfulness of processing before withdrawal.</li>
             </ul>
           </Section>
@@ -185,7 +185,7 @@ export default function PrivacyPage() {
                 Strava&apos;s connected apps settings
               </a>{" "}
               or the <span className="font-medium text-[#2C2520]">Disconnect &amp; Delete My Data</span> button in
-              the app — this deletes your data immediately and automatically, with nothing further to do.
+              the app - this deletes your data immediately and automatically, with nothing further to do.
             </p>
             <p>
               If you&apos;d rather request deletion directly (for example, if you no longer have

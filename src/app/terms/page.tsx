@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Terms of Service — My Trail Log",
+  title: "Terms of Service - My Trail Log",
 };
 
 function LogoIcon({ className }: { className?: string }) {

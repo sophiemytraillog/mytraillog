@@ -63,7 +63,7 @@ export default function SyncButton({
       chunkCountRef.current += 1;
       if (chunkCountRef.current >= MAX_CHUNKS) {
         setSyncState("error");
-        setData((prev) => ({ ...prev, message: "Sync is taking longer than expected — please retry." }));
+        setData((prev) => ({ ...prev, message: "Sync is taking longer than expected - please retry." }));
         return;
       }
       runChunk();
@@ -78,7 +78,7 @@ export default function SyncButton({
       // (nothing new to match) and sends "matched" immediately after this,
       // so d.message ("Sync complete — already up to date") is already the
       // final text — no interim "updating trail progress…" to show.
-      const interim = d.saved > 0 ? `${d.message} — updating trail progress…` : d.message;
+      const interim = d.saved > 0 ? `${d.message} - updating trail progress…` : d.message;
       setData({ ...final, message: interim });
       // Deliberately NOT closing the EventSource here — matching runs
       // server-side after "done" is sent, and closing now would sever the
@@ -108,7 +108,7 @@ export default function SyncButton({
 
     es.onerror = () => {
       setSyncState((prev) => (prev === "done" ? prev : "error"));
-      setData((prev) => ({ ...prev, message: "Connection lost — please retry" }));
+      setData((prev) => ({ ...prev, message: "Connection lost - please retry" }));
       es.close();
     };
   };

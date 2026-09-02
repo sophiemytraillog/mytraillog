@@ -55,7 +55,7 @@ async function fetchWithTimeout(url: string, options: RequestInit, ms = 30_000):
 export class StravaRateLimitError extends Error {
   readonly retryAfterSeconds: number;
   constructor(retryAfterSeconds: number) {
-    super(`Strava rate limit hit — retry after ${retryAfterSeconds}s`);
+    super(`Strava rate limit hit - retry after ${retryAfterSeconds}s`);
     this.retryAfterSeconds = retryAfterSeconds;
   }
 }
@@ -383,7 +383,7 @@ export async function writeTrailDescription(
   if (!getRes.ok) {
     if (getRes.status === 403 || getRes.status === 401) {
       throw new ScopeError(
-        `Strava returned ${getRes.status} — reconnect your account to grant activity:write permission.`
+        `Strava returned ${getRes.status} - reconnect your account to grant activity:write permission.`
       );
     }
     throw new Error(`GET /activities/${stravaActivityId} failed: HTTP ${getRes.status}`);
@@ -458,7 +458,7 @@ export async function writeTrailDescription(
   if (!putRes.ok) {
     if (putRes.status === 403 || putRes.status === 401) {
       throw new ScopeError(
-        `Strava returned ${putRes.status} — reconnect your account to grant activity:write permission.`
+        `Strava returned ${putRes.status} - reconnect your account to grant activity:write permission.`
       );
     }
     const body = await putRes.text();

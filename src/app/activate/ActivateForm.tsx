@@ -34,7 +34,7 @@ export default function ActivateForm() {
       }
       router.push("/dashboard?autoSync=true");
     } catch {
-      setError("Something went wrong — please try again.");
+      setError("Something went wrong - please try again.");
     } finally {
       setSubmitting(false);
     }
@@ -47,7 +47,7 @@ export default function ActivateForm() {
           Enter your email to activate your free trial
         </h1>
         <p className="text-[#8A7F72] text-sm mb-6 leading-relaxed">
-          Strava doesn&apos;t share your email with us — we need one to activate your trial and send
+          Strava doesn&apos;t share your email with us - we need one to activate your trial and send
           account notifications.
         </p>
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">
@@ -74,7 +74,7 @@ export default function ActivateForm() {
         </form>
         {error && <p className="text-[#C4652A] text-xs mt-3">{error}</p>}
         <p className="text-[#8A7F72]/60 text-xs mt-5">
-          We&apos;ll only use this for account notifications — no spam.
+          We&apos;ll only use this for account notifications - no spam.
         </p>
       </div>
     </div>

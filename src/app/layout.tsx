@@ -21,7 +21,7 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: "My Trail Log — Track Britain's great trails with Strava",
+  title: "My Trail Log - Track Britain's great trails with Strava",
   description: "Connect your Strava account and discover how much of the UK's iconic long-distance paths you've already covered.",
 };
 

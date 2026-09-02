@@ -7,7 +7,7 @@ export default function ConnectStrava() {
           compliance), so the requested CTA copy sits as a heading above it
           instead. */}
       <p className="text-[#2C2520] font-semibold text-sm mb-3">
-        Connect with Strava — free for 1 month
+        Connect with Strava - free for 1 month
       </p>
       <a
         href="/api/auth/strava"
@@ -21,7 +21,7 @@ export default function ConnectStrava() {
         />
       </a>
       <p className="text-[#8A7F72] text-xs mt-3">
-        Full access free for 1 month. Then £19.99/year to keep tracking.
+        Full access free for 1 month. Then £12.99/year to keep tracking.
       </p>
     </div>
   );

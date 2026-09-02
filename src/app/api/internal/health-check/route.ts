@@ -189,7 +189,7 @@ export async function GET(request: NextRequest) {
   const trialHadActivity = trialSummaryLines.length > 1; // index 0 is always the status-counts line
   if (!healthy || trialHadActivity) {
     await sendNotificationEmail(
-      `My Trail Log health check — ${issues.length} issue(s) found`,
+      `My Trail Log health check - ${issues.length} issue(s) found`,
       [...issues, ...trialSummaryLines]
     );
   }

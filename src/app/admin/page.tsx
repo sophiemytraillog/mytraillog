@@ -182,7 +182,7 @@ export default async function AdminPage() {
     <div className="min-h-screen bg-[#FAF8F5] px-6 py-10">
       <div className="max-w-5xl mx-auto">
         <h1 className="text-2xl font-bold text-[#2C2520] tracking-tight mb-1">Admin</h1>
-        <p className="text-[#8A7F72] text-sm mb-8">Internal stats — visible only to your account.</p>
+        <p className="text-[#8A7F72] text-sm mb-8">Internal stats - visible only to your account.</p>
 
         {/* ── Stat cards ─────────────────────────────────────────── */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mb-10">
@@ -196,7 +196,7 @@ export default async function AdminPage() {
           <StatCard
             label="Backfill API calls today"
             value={`${callsUsedToday}/${BACKFILL_DAILY_UPDATE_LIMIT * 2}`}
-            sub="Description-update backlog only — shared across all users"
+            sub="Description-update backlog only - shared across all users"
           />
         </div>
 
@@ -295,7 +295,7 @@ export default async function AdminPage() {
                   <span className="text-sm text-[#2C2520] truncate mr-3">
                     <span className="text-[#8A7F72] tabular-nums mr-2">{i + 1}.</span>
                     {t.trail_name}
-                    {t.region && <span className="text-[#8A7F72]/70"> — {t.region}</span>}
+                    {t.region && <span className="text-[#8A7F72]/70"> - {t.region}</span>}
                   </span>
                   <span className="text-sm text-[#8A7F72] tabular-nums shrink-0">
                     {t.request_count}×

@@ -109,7 +109,7 @@ function GracePeriodBanner({ trialEndsAt }: { trialEndsAt: Date | null }) {
   return (
     <div className="bg-[#C4652A] text-white rounded-2xl px-5 py-4 mb-4 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
       <p className="text-sm font-medium flex-1 leading-snug">
-        Your free trial has ended. Subscribe to keep tracking — your data will be removed in{" "}
+        Your free trial has ended. Subscribe to keep tracking - your data will be removed in{" "}
         {days} {days === 1 ? "day" : "days"}.
       </p>
       <a
@@ -448,7 +448,7 @@ export default function DashboardClient({
                     </p>
                     {descUpdates && !hasWriteScope && (
                       <p className="text-[#C4652A] text-[10px] mt-1">
-                        Requires activity:write —{" "}
+                        Requires activity:write -{" "}
                         <a href="/api/auth/strava" className="underline hover:no-underline">
                           reconnect Strava
                         </a>
@@ -471,7 +471,7 @@ export default function DashboardClient({
                     </select>
                     <p className="text-[#8A7F72]/60 text-[10px] mt-1 leading-relaxed">
                       {descMode === "full" && "Writes trail progress on every matched activity, even with no new ground."}
-                      {descMode === "new_only" && "Only writes when an activity covers new trail ground — just the new distance."}
+                      {descMode === "new_only" && "Only writes when an activity covers new trail ground - just the new distance."}
                       {descMode === "new_with_totals" && "Only writes when an activity covers new trail ground, with totals included."}
                     </p>
                   </div>
@@ -567,7 +567,7 @@ export default function DashboardClient({
                     </button>
                   </div>
                   <p className="text-[#8A7F72]/70 text-[10px] leading-relaxed">
-                    We&apos;ll only use this for account notifications — no spam.
+                    We&apos;ll only use this for account notifications - no spam.
                   </p>
                   {emailStatus === "saved" && <p className="text-[#4A7C59] text-[10px]">Saved.</p>}
                   {emailStatus === "error" && (

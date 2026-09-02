@@ -69,7 +69,7 @@ export async function POST(
 
     if (rows.length === 0) {
       return NextResponse.json(
-        { error: "Points are too close together — click further apart on the trail" },
+        { error: "Points are too close together - click further apart on the trail" },
         { status: 422 }
       );
     }

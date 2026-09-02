@@ -62,7 +62,7 @@ async function sendTrialEndingReminders(): Promise<number> {
       "Your My Trail Log free trial ends in 7 days",
       [
         `Hi ${user.first_name ?? "there"},`,
-        "Your My Trail Log free trial ends in 7 days. Subscribe for £19.99/year to keep tracking your trails.",
+        "Your My Trail Log free trial ends in 7 days. Subscribe for £12.99/year to keep tracking your trails.",
       ]
     );
     logSyncEvent(user.id, "trial_reminder_sent", {});

@@ -120,7 +120,7 @@ export async function GET(request: NextRequest) {
                 updated,
                 errors,
                 remaining,
-                message: `Updated ${updated} of ${i} checked — ${remaining} remaining. Run again to continue.`,
+                message: `Updated ${updated} of ${i} checked - ${remaining} remaining. Run again to continue.`,
               });
               return;
             }
@@ -136,7 +136,7 @@ export async function GET(request: NextRequest) {
                 updated,
                 errors,
                 remaining,
-                message: `Updated ${updated} of ${i} checked — ${remaining} remaining. Strava rate limit reached, run again in ~${mins} min to continue.`,
+                message: `Updated ${updated} of ${i} checked - ${remaining} remaining. Strava rate limit reached, run again in ~${mins} min to continue.`,
               });
               return;
             }
@@ -178,7 +178,7 @@ export async function GET(request: NextRequest) {
                   updated,
                   errors,
                   remaining,
-                  message: `Updated ${updated} of ${i} checked — ${remaining} remaining. Daily backfill pacing limit reached — more opens up gradually through the day. Run again later.`,
+                  message: `Updated ${updated} of ${i} checked - ${remaining} remaining. Daily backfill pacing limit reached - more opens up gradually through the day. Run again later.`,
                 });
                 return;
               }
@@ -224,7 +224,7 @@ export async function GET(request: NextRequest) {
                   updated,
                   errors,
                   remaining,
-                  message: `Updated ${updated} of ${i} checked — ${remaining} remaining. Strava rate limit reached, run again in ~${mins} min to continue.`,
+                  message: `Updated ${updated} of ${i} checked - ${remaining} remaining. Strava rate limit reached, run again in ~${mins} min to continue.`,
                 });
                 return;
               }
@@ -265,7 +265,7 @@ export async function GET(request: NextRequest) {
           updated,
           errors,
           remaining: 0,
-          message: `Done — updated ${updated} activit${updated !== 1 ? "ies" : "y"}, nothing left to check`,
+          message: `Done - updated ${updated} activit${updated !== 1 ? "ies" : "y"}, nothing left to check`,
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unexpected error";

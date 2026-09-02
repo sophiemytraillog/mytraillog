@@ -5,7 +5,7 @@ const steps = [
     number: "01",
     title: "Connect Strava",
     description:
-      "Link your Strava account with one click. We only ever read your activity data — we never post or modify anything.",
+      "Link your Strava account with one click. We only ever read your activity data - we never post or modify anything.",
     icon: (
       <svg
         xmlns="http://www.w3.org/2000/svg"
@@ -99,21 +99,21 @@ function GetStartedLink() {
       href="#get-started"
       className="inline-block px-8 py-3.5 rounded-xl bg-[#C4652A] text-white font-semibold hover:bg-[#C4652A]/90 hover:-translate-y-0.5 active:translate-y-0 transition-all duration-200"
     >
-      Connect with Strava — free for 1 month
+      Connect with Strava - free for 1 month
     </a>
   );
 }
 
 const OAUTH_ERROR_MESSAGES: Record<string, string> = {
-  access_denied: "Strava connection cancelled — no changes were made.",
-  invalid_state: "Your session expired before Strava could connect — please try again.",
-  no_code: "Strava didn't send back the expected authorisation — please try again.",
-  token_exchange_failed: "We couldn't complete the connection with Strava — please try again.",
+  access_denied: "Strava connection cancelled - no changes were made.",
+  invalid_state: "Your session expired before Strava could connect - please try again.",
+  no_code: "Strava didn't send back the expected authorisation - please try again.",
+  token_exchange_failed: "We couldn't complete the connection with Strava - please try again.",
 };
 
 function ConnectErrorBanner({ error }: { error?: string }) {
   if (!error) return null;
-  const message = OAUTH_ERROR_MESSAGES[error] ?? "Something went wrong connecting to Strava — please try again.";
+  const message = OAUTH_ERROR_MESSAGES[error] ?? "Something went wrong connecting to Strava - please try again.";
   return (
     <div className="max-w-lg mx-auto mb-8 px-4 py-3 rounded-xl bg-[#C4652A]/10 border border-[#C4652A]/20 text-[#C4652A] text-sm text-center">
       {message}
@@ -183,7 +183,7 @@ export default function Home({
 
           <p className="text-[#8A7F72] text-lg md:text-xl max-w-lg mx-auto mb-10 leading-relaxed">
             Connect your Strava account and My Trail Log automatically maps your progress across the
-            UK&apos;s National Trails and 1,000+ long-distance paths. No extra tracking needed — we match
+            UK&apos;s National Trails and 1,000+ long-distance paths. No extra tracking needed - we match
             your existing activities.
           </p>
 

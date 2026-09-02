@@ -105,9 +105,9 @@ export async function GET(request: NextRequest) {
           send("done", {
             fetched: result.fetched,
             saved: result.saved,
-            message: "Sync complete — already up to date",
+            message: "Sync complete - already up to date",
           });
-          send("matched", { matchedTrails: 0, message: "Sync complete — already up to date" });
+          send("matched", { matchedTrails: 0, message: "Sync complete - already up to date" });
           // Nothing new to match from THIS sync, but a previous sync could
           // still have left deferred trails unchecked (finishSync's own
           // inline pass is capped — see MAX_TRAILS_PER_FINISH_SYNC) — catch
@@ -127,7 +127,7 @@ export async function GET(request: NextRequest) {
         send("done", {
           fetched: result.fetched,
           saved: result.saved,
-          message: `Sync complete — ${result.saved} activit${result.saved === 1 ? "y" : "ies"} saved`,
+          message: `Sync complete - ${result.saved} activit${result.saved === 1 ? "y" : "ies"} saved`,
         });
 
         const { matchedTrails } = await finishSync(userId, result.newDbIds);

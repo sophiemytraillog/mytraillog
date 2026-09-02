@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Support — My Trail Log",
+  title: "Support - My Trail Log",
 };
 
 function LogoIcon({ className }: { className?: string }) {
@@ -73,7 +73,7 @@ export default function SupportPage() {
             <Faq question="How do I connect my Strava account?">
               <p>
                 From the My Trail Log home page, click <span className="font-medium text-[#2C2520]">Connect with Strava</span>.
-                You&apos;ll be taken to Strava to authorise access — once you approve, you&apos;ll be redirected straight
+                You&apos;ll be taken to Strava to authorise access - once you approve, you&apos;ll be redirected straight
                 to your dashboard and your activities will begin syncing.
               </p>
             </Faq>
@@ -86,7 +86,7 @@ export default function SupportPage() {
               <ul className="list-disc list-inside mt-2 space-y-1 pl-1">
                 <li>The activity was recorded without GPS (e.g. a manual entry or indoor activity).</li>
                 <li>Your route ran parallel to but not close enough to the trail line.</li>
-                <li>The activity type is not included in your sync settings — check whether cycle rides are enabled if relevant.</li>
+                <li>The activity type is not included in your sync settings - check whether cycle rides are enabled if relevant.</li>
               </ul>
               <p className="mt-2">
                 If you&apos;ve recently synced and an activity still isn&apos;t showing, try clicking <span className="font-medium text-[#2C2520]">Sync Activities</span> again
@@ -101,7 +101,7 @@ export default function SupportPage() {
                   Strava connected apps settings
                 </a>{" "}
                 or the <span className="font-medium text-[#2C2520]">Disconnect &amp; Delete My Data</span> button
-                in the app — either one deletes all your data immediately and automatically, no email required.
+                in the app - either one deletes all your data immediately and automatically, no email required.
               </p>
               <p className="mt-2">
                 Alternatively, email us at{" "}
@@ -120,7 +120,7 @@ export default function SupportPage() {
                 official trail geometry. A few things to be aware of:
               </p>
               <ul className="list-disc list-inside mt-2 space-y-1 pl-1">
-                <li>Only activities synced to My Trail Log count — if you walked a section before connecting, sync your full activity history first.</li>
+                <li>Only activities synced to My Trail Log count - if you walked a section before connecting, sync your full activity history first.</li>
                 <li>Progress is based on distance covered along the official route, not straight-line distance.</li>
                 <li>Official trail routes are occasionally updated to reflect diversions or seasonal changes, which can affect percentages.</li>
               </ul>

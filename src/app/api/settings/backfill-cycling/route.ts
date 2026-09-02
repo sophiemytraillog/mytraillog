@@ -76,8 +76,8 @@ export async function GET() {
         send("done", {
           matchedTrails,
           message: matchedTrails > 0
-            ? `Done — ${matchedTrails} trail${matchedTrails === 1 ? "" : "s"} updated`
-            : "Done — no trail matches found",
+            ? `Done - ${matchedTrails} trail${matchedTrails === 1 ? "" : "s"} updated`
+            : "Done - no trail matches found",
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : "An unexpected error occurred";
