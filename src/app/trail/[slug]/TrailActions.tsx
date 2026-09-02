@@ -40,6 +40,12 @@ interface TrailActionsProps {
   hasProgress: boolean;
   activities: ActivityWithGeo[];
   children?: React.ReactNode;
+  // 2026-09-30 feature gating: gap fill, mark complete, and manual segment
+  // drawing are basic-tier features (trial + active) — locked once a trial
+  // lapses into grace_period. The three POST routes these buttons call
+  // enforce this server-side regardless; this just keeps the buttons from
+  // firing a doomed request and shows the locked messaging up front.
+  hasBasicAccess: boolean;
 }
 
 export default function TrailActions({
@@ -51,6 +57,7 @@ export default function TrailActions({
   hasProgress,
   activities,
   children,
+  hasBasicAccess,
 }: TrailActionsProps) {
   const [selectedActivityId, setSelectedActivityId] = useState<string | null>(null);
   const [selectedActivityGeoJson, setSelectedActivityGeoJson] = useState<object | null>(null);
@@ -263,7 +270,7 @@ export default function TrailActions({
         {hasProgress && (
           <button
             onClick={handleFillGaps}
-            disabled={isFilling || !!pendingAction}
+            disabled={isFilling || !!pendingAction || !hasBasicAccess}
             className="flex items-center gap-1.5 px-3 py-2.5 rounded-lg text-sm font-medium bg-white border border-[#E5DED4] text-[#8A7F72] hover:text-[#2C2520] hover:border-[#C4652A]/40 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <svg
@@ -286,7 +293,7 @@ export default function TrailActions({
         {hasProgress && (
           <button
             onClick={() => { setPendingAction("fill-all"); setMessage(null); }}
-            disabled={isFilling || !!pendingAction}
+            disabled={isFilling || !!pendingAction || !hasBasicAccess}
             className="flex items-center gap-1.5 px-3 py-2.5 rounded-lg text-sm font-medium bg-white border border-[#E5DED4] text-[#8A7F72] hover:text-[#2C2520] hover:border-[#C4652A]/40 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5">
@@ -299,7 +306,7 @@ export default function TrailActions({
         {/* Mark whole trail complete */}
         <button
           onClick={() => { setPendingAction("mark-complete"); setMessage(null); }}
-          disabled={isFilling || !!pendingAction}
+          disabled={isFilling || !!pendingAction || !hasBasicAccess}
           className="flex items-center gap-1.5 px-3 py-2.5 rounded-lg text-sm font-medium bg-white border border-[#E5DED4] text-[#8A7F72] hover:text-[#2C2520] hover:border-[#C4652A]/40 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5">
@@ -315,7 +322,8 @@ export default function TrailActions({
               setIsMarkingMode(true);
               setMessage(null);
             }}
-            className="flex items-center gap-1.5 px-3 py-2.5 rounded-lg text-sm font-medium bg-white border border-[#E5DED4] text-[#8A7F72] hover:text-[#2C2520] hover:border-[#C4652A]/40 transition-colors"
+            disabled={!hasBasicAccess}
+            className="flex items-center gap-1.5 px-3 py-2.5 rounded-lg text-sm font-medium bg-white border border-[#E5DED4] text-[#8A7F72] hover:text-[#2C2520] hover:border-[#C4652A]/40 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -340,6 +348,14 @@ export default function TrailActions({
           </button>
         )}
       </div>
+
+      {!hasBasicAccess && (
+        <div className="border border-[#C4652A]/30 bg-[#C4652A]/5 rounded-lg px-3 py-2.5 mb-4">
+          <p className="text-[#C4652A] text-xs font-medium">
+            Subscribe to unlock gap fill and mark-complete
+          </p>
+        </div>
+      )}
 
       {/* Confirm fill-all / mark-complete */}
       {pendingAction && (

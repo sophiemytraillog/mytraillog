@@ -18,6 +18,7 @@ import {
 import { triggerDescriptionChain, triggerDrainIfNotRunToday } from "@/lib/description-chain";
 import { triggerMatchChain } from "@/lib/match-chain";
 import { logSyncEvent } from "@/lib/sync-log";
+import { hasBasicAccess } from "@/lib/subscription";
 
 // A single trail's match computation can legitimately take well over a
 // minute for an active user — ST_Union over hundreds/thousands of nearby
@@ -251,17 +252,30 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number) {
   let resolvedUserId: string | null = null;
 
   try {
-    const { rows: [user] } = await pool.query<{ id: string }>(
-      "SELECT id FROM users WHERE strava_id = $1",
+    const { rows: [user] } = await pool.query<{ id: string; subscription_status: string }>(
+      "SELECT id, subscription_status FROM users WHERE strava_id = $1",
       [stravaAthleteId]
     );
     if (!user) {
       console.log(
-        `[webhook/strava] Athlete ${stravaAthleteId} not in our DB — ignoring`
+        `[webhook/strava] Athlete ${stravaAthleteId} not in our DB - ignoring`
       );
       return;
     }
     resolvedUserId = user.id;
+
+    // Strava still requires an ack for every event regardless of what we do
+    // with it (the POST handler above already returned 200 before this
+    // background function even started — see waitUntil), so skipping all
+    // real work here costs nothing on Strava's side. Added 2026-09-30:
+    // trial/subscription feature gating — a lapsed account (grace_period,
+    // or eventually expired) shouldn't spend an API call, a DB write, or a
+    // matching/description-writing pass on new activity data; everything
+    // they built during the trial stays visible, nothing new gets added.
+    if (!hasBasicAccess(user.subscription_status)) {
+      console.log(`[webhook/strava] User ${user.id} has no basic access (${user.subscription_status}) - skipping processing`);
+      return;
+    }
 
     // Backup for the daily cron drain, which isn't reliable enough to
     // depend on alone (2026-08-25: zero cron-drain activity found in

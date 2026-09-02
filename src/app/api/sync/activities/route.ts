@@ -78,7 +78,7 @@ export async function GET(request: NextRequest) {
           return;
         }
 
-        if (result.status === "rate_limited" || result.status === "error") {
+        if (result.status === "rate_limited" || result.status === "error" || result.status === "subscription_required") {
           send("error", { message: result.message });
           return;
         }

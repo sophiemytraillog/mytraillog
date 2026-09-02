@@ -254,21 +254,28 @@ async function pickNextMatchDrainCandidate(): Promise<{ id: string; first_name: 
     const { rows } = await client.query<{ id: string; first_name: string | null }>(
       `SELECT u.id, u.first_name
        FROM users u
-       WHERE EXISTS (
-         SELECT 1 FROM trails t
-         WHERE NOT EXISTS (
-           SELECT 1 FROM trail_match_checks c WHERE c.user_id = u.id AND c.trail_id = t.id
+       WHERE (
+         EXISTS (
+           SELECT 1 FROM trails t
+           WHERE NOT EXISTS (
+             SELECT 1 FROM trail_match_checks c WHERE c.user_id = u.id AND c.trail_id = t.id
+           )
+         )
+         OR EXISTS (
+           SELECT 1
+           FROM activities a
+           JOIN trails t ON t.simplified_geometry && ST_Expand(a.geometry, ${STALE_CHECK_BBOX_DEGREES})
+           JOIN trail_match_checks c ON c.user_id = a.user_id AND c.trail_id = t.id
+           WHERE a.user_id = u.id
+             AND a.geometry IS NOT NULL
+             AND a.created_at > c.checked_at
          )
        )
-       OR EXISTS (
-         SELECT 1
-         FROM activities a
-         JOIN trails t ON t.simplified_geometry && ST_Expand(a.geometry, ${STALE_CHECK_BBOX_DEGREES})
-         JOIN trail_match_checks c ON c.user_id = a.user_id AND c.trail_id = t.id
-         WHERE a.user_id = u.id
-           AND a.geometry IS NOT NULL
-           AND a.created_at > c.checked_at
-       )
+       -- Basic-feature gate (2026-09-30): matching stops for grace_period/
+       -- expired accounts, same as sync — see subscription.ts's
+       -- hasBasicAccess (kept in sync manually, since this runs as raw SQL
+       -- rather than importing the JS helper).
+       AND u.subscription_status IN ('trial', 'active')
        ORDER BY COALESCE(
          (SELECT MAX(s.created_at) FROM sync_log s
           WHERE s.user_id = u.id AND s.event IN ('cron_match_sweep', 'client_match_batch')),

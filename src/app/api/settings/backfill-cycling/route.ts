@@ -2,6 +2,8 @@ import { cookies } from "next/headers";
 import { pool } from "@/lib/db";
 import { CYCLING_ACTIVITY_TYPES } from "@/lib/strava";
 import { computeTrailProgress } from "@/lib/match-trails";
+import { hasBasicAccess } from "@/lib/subscription";
+import { getSubscriptionStatus } from "@/lib/subscription-db";
 
 export const dynamic = "force-dynamic";
 
@@ -49,6 +51,14 @@ export async function GET() {
       };
 
       try {
+        // Reachable in normal use only right after include_cycling is
+        // switched on, which PATCH /api/settings already gates — this is
+        // defense-in-depth against a direct request. See fill-gaps/route.ts.
+        if (!hasBasicAccess(await getSubscriptionStatus(userId))) {
+          send("error", { message: "Subscribe to unlock this feature" });
+          return;
+        }
+
         send("progress", { message: "Finding trails near your cycling activities…" });
 
         const { rows: affectedTrails } = await pool.query<{ id: string }>(

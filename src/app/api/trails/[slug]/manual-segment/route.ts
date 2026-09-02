@@ -2,6 +2,8 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { type PoolClient } from "pg";
 import { pool } from "@/lib/db";
+import { hasBasicAccess } from "@/lib/subscription";
+import { getSubscriptionStatus } from "@/lib/subscription-db";
 
 export async function POST(
   req: Request,
@@ -9,6 +11,14 @@ export async function POST(
 ) {
   const userId = cookies().get("strava_user_id")?.value;
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  // Same basic-feature gate as fill-gaps/route.ts — see its comment.
+  if (!hasBasicAccess(await getSubscriptionStatus(userId))) {
+    return NextResponse.json(
+      { error: "Subscribe to unlock this feature", locked: true },
+      { status: 403 }
+    );
+  }
 
   let pointA: [number, number], pointB: [number, number];
   try {

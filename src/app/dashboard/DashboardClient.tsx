@@ -11,6 +11,7 @@ import RequestTrailModal from "./RequestTrailModal";
 import DeleteAccountModal from "./DeleteAccountModal";
 import { useDistanceUnit } from "@/app/DistanceUnitProvider";
 import { formatDist, unitLabel } from "@/lib/distance";
+import { hasBasicAccess, hasPremiumAccess, type SubscriptionStatus } from "@/lib/subscription";
 
 const DashboardMap = dynamic(() => import("./DashboardMap"), {
   ssr: false,
@@ -51,8 +52,6 @@ interface UserStats {
 }
 
 type DescriptionMode = "full" | "new_only" | "new_with_totals";
-
-type SubscriptionStatus = "trial" | "active" | "expired" | "grace_period";
 
 interface Props {
   athlete: Athlete;
@@ -109,8 +108,10 @@ function GracePeriodBanner({ trialEndsAt }: { trialEndsAt: Date | null }) {
   return (
     <div className="bg-[#C4652A] text-white rounded-2xl px-5 py-4 mb-4 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
       <p className="text-sm font-medium flex-1 leading-snug">
-        Your free trial has ended. Subscribe to keep tracking - your data will be removed in{" "}
-        {days} {days === 1 ? "day" : "days"}.
+        Your trail progress is paused. Subscribe for £12.99/year to resume tracking.
+        <span className="block sm:inline sm:before:content-['_·_'] opacity-90 font-normal">
+          Your data will be removed in {days} {days === 1 ? "day" : "days"} if you don&apos;t subscribe.
+        </span>
       </p>
       <a
         href="mailto:mytrailloguk@gmail.com?subject=Subscribe%20to%20My%20Trail%20Log"
@@ -157,6 +158,11 @@ export default function DashboardClient({
   subscriptionStatus, trialEndsAt, contactEmail,
 }: Props) {
   const trialStatusText = formatTrialStatus(subscriptionStatus, trialEndsAt);
+  // Feature-gating flags (2026-09-30 request) — basic covers sync/matching/
+  // new-activity descriptions/gap-fill/cycling toggle (trial + active);
+  // premium covers historical description backfill only (active alone).
+  const basicAccess = hasBasicAccess(subscriptionStatus);
+  const premiumAccess = hasPremiumAccess(subscriptionStatus);
   const { unit, setUnit } = useDistanceUnit();
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "started">("all");
@@ -408,6 +414,7 @@ export default function DashboardClient({
                 autoSync={autoSync}
                 initialActivityCount={activityCount}
                 onSyncComplete={() => setLastSyncedAt(new Date())}
+                hasBasicAccess={basicAccess}
               />
               {/* Remounts (fresh initialChecked/initialTotal from the server)
                   every time a sync finishes, so it always picks up from
@@ -477,7 +484,7 @@ export default function DashboardClient({
                   </div>
                 )}
 
-                <UpdateDescriptionsButton />
+                <UpdateDescriptionsButton hasPremiumAccess={premiumAccess} />
               </div>
 
               {/* Cycling activities setting */}
@@ -488,12 +495,12 @@ export default function DashboardClient({
                       type="checkbox"
                       className="sr-only"
                       checked={cyclingEnabled}
-                      disabled={savingCycling}
+                      disabled={savingCycling || !basicAccess}
                       onChange={(e) => toggleCyclingActivities(e.target.checked)}
                     />
                     <div className={`w-8 rounded-full transition-colors ${
                       cyclingEnabled ? "bg-[#4A7C59]" : "bg-[#E5DED4]"
-                    } ${savingCycling ? "opacity-50" : ""}`}
+                    } ${savingCycling || !basicAccess ? "opacity-50" : ""}`}
                       style={{ height: "18px" }}
                     >
                       <div className={`absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white shadow transition-transform ${
@@ -508,6 +515,11 @@ export default function DashboardClient({
                     <p className="text-[#8A7F72]/70 text-[10px] mt-0.5 leading-relaxed">
                       Match Ride, Gravel Ride, and Mountain Bike activities against trails.
                     </p>
+                    {!basicAccess && (
+                      <p className="text-[#C4652A] text-[10px] mt-0.5 font-medium">
+                        Subscribe to unlock
+                      </p>
+                    )}
                   </div>
                 </label>
                 {backfillStatus && (

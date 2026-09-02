@@ -15,10 +15,17 @@ export default function SyncButton({
   autoSync,
   initialActivityCount,
   onSyncComplete,
+  hasBasicAccess,
 }: {
   autoSync: boolean;
   initialActivityCount: number;
   onSyncComplete?: () => void;
+  // 2026-09-30 feature gating: sync stops once a trial lapses into
+  // grace_period. The server (runSyncChunk, see sync-engine.ts) is the
+  // real enforcement point regardless of this prop; this just keeps the
+  // button from ever starting a sync doomed to come back as an error, and
+  // shows the locked-state messaging up front instead.
+  hasBasicAccess: boolean;
 }) {
   const router = useRouter();
   const [syncState, setSyncState] = useState<SyncState>("idle");
@@ -114,7 +121,7 @@ export default function SyncButton({
   };
 
   const startSync = () => {
-    if (syncState === "syncing") return;
+    if (syncState === "syncing" || !hasBasicAccess) return;
     esRef.current?.close();
 
     baseRef.current = { fetched: 0, saved: 0 };
@@ -128,7 +135,7 @@ export default function SyncButton({
   };
 
   useEffect(() => {
-    if (autoSync && !autoFired.current) {
+    if (autoSync && hasBasicAccess && !autoFired.current) {
       autoFired.current = true;
       startSync();
     }
@@ -136,7 +143,7 @@ export default function SyncButton({
       esRef.current?.close();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoSync]);
+  }, [autoSync, hasBasicAccess]);
 
   return (
     <div className="mt-6 w-full">
@@ -215,7 +222,16 @@ export default function SyncButton({
       )}
 
       {/* Button */}
-      {syncState !== "syncing" && (
+      {syncState !== "syncing" && !hasBasicAccess && (
+        <button
+          disabled
+          title="Your trial has ended - subscribe to resume syncing"
+          className="w-full flex items-center justify-center gap-2 bg-[#C4652A]/5 border border-[#C4652A]/30 text-[#C4652A] text-sm font-medium py-2.5 px-4 rounded-xl cursor-not-allowed"
+        >
+          Subscribe to keep tracking
+        </button>
+      )}
+      {syncState !== "syncing" && hasBasicAccess && (
         <button
           onClick={startSync}
           className="w-full flex items-center justify-center gap-2 bg-white hover:bg-[#FAF8F5] border border-[#E5DED4] hover:border-[#C4652A]/40 text-[#2C2520] text-sm font-medium py-2.5 px-4 rounded-xl transition-all duration-150"

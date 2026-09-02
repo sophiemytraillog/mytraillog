@@ -17,7 +17,7 @@ interface DoneState {
   message: string;
 }
 
-export default function UpdateDescriptionsButton() {
+export default function UpdateDescriptionsButton({ hasPremiumAccess }: { hasPremiumAccess: boolean }) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [progress, setProgress] = useState<ProgressState | null>(null);
   const [done, setDone] = useState<DoneState | null>(null);
@@ -85,6 +85,23 @@ export default function UpdateDescriptionsButton() {
   const pct = progress && progress.total > 0
     ? Math.round((progress.current / progress.total) * 100)
     : 0;
+
+  // Historical description backfill is paid-only — locked for trial and
+  // grace_period/expired alike (2026-09-30 feature gating). The button
+  // never even opens an EventSource in this state; the API route itself
+  // also checks (defense-in-depth — see update-descriptions/route.ts).
+  if (!hasPremiumAccess) {
+    return (
+      <div className="mt-3">
+        <div className="border border-[#C4652A]/30 bg-[#C4652A]/5 rounded-lg px-3 py-2.5">
+          <p className="text-xs text-[#C4652A] font-medium mb-1">Premium</p>
+          <p className="text-[#8A7F72] text-[10px] leading-relaxed">
+            Update historical activity descriptions - subscribe to unlock.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mt-3">

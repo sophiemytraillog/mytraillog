@@ -190,6 +190,11 @@ async function pickNextDrainCandidate(): Promise<{ id: string; first_name: strin
          JOIN activity_trail_matches atm ON atm.activity_id = a.id
          WHERE a.user_id = u.id AND a.strava_description_updated = FALSE
        )
+       -- Basic-feature gate (2026-09-30): new-activity description writes
+       -- stop for grace_period/expired accounts, same as sync/matching —
+       -- see subscription.ts's hasBasicAccess (kept in sync manually, since
+       -- this runs as raw SQL rather than importing the JS helper).
+       AND u.subscription_status IN ('trial', 'active')
      ORDER BY
        (u.id = $1) ASC,
        COALESCE(

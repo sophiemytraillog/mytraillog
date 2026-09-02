@@ -5,6 +5,7 @@ import { query } from "@/lib/db";
 import { getMatchProgress } from "@/lib/match-trails";
 import { triggerMatchChain } from "@/lib/match-chain";
 import { triggerDrainIfNotRunToday } from "@/lib/description-chain";
+import { hasBasicAccess, type SubscriptionStatus } from "@/lib/subscription";
 import DashboardClient, { type TrailRow } from "./DashboardClient";
 
 interface Athlete {
@@ -51,7 +52,7 @@ export default async function Dashboard({
   let stravaScope: string | null = null;
   let includeCycling = false;
   let staleSync = false;
-  let subscriptionStatus: "trial" | "active" | "expired" | "grace_period" = "trial";
+  let subscriptionStatus: SubscriptionStatus = "trial";
   let trialEndsAt: Date | null = null;
   let contactEmail: string | null = null;
   if (userId) {
@@ -63,7 +64,7 @@ export default async function Dashboard({
           strava_scope: string | null;
           include_cycling: boolean;
           stale_sync: boolean;
-          subscription_status: "trial" | "active" | "expired" | "grace_period";
+          subscription_status: SubscriptionStatus;
           trial_ends_at: Date | null;
           contact_email: string | null;
         }
@@ -190,7 +191,7 @@ export default async function Dashboard({
     // just opens the dashboard with leftover matching from before needs
     // this trigger too. Harmless if a chain is already running (matchNextBatch's
     // upserts are idempotent) or already done (an immediate no-op).
-    if (matchProgress.totalChecked < matchProgress.totalTrails) {
+    if (matchProgress.totalChecked < matchProgress.totalTrails && hasBasicAccess(subscriptionStatus)) {
       waitUntil(triggerMatchChain(userId));
     }
 

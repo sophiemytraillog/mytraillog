@@ -3,6 +3,7 @@ import { redirect, notFound } from "next/navigation";
 import Link from "next/link";
 import { query, pool } from "@/lib/db";
 import { CYCLING_ACTIVITY_TYPES } from "@/lib/strava";
+import { hasBasicAccess } from "@/lib/subscription";
 import TrailActions, { type ManualSegment } from "./TrailActions";
 import TrailStats from "./TrailStats";
 
@@ -64,8 +65,8 @@ export default async function TrailDetailPage({
        WHERE t.slug = $2`,
       [userId, params.slug]
     ),
-    query<{ include_cycling: boolean }>(
-      "SELECT include_cycling FROM users WHERE id = $1",
+    query<{ include_cycling: boolean; subscription_status: string }>(
+      "SELECT include_cycling, subscription_status FROM users WHERE id = $1",
       [userId]
     ),
   ]);
@@ -73,6 +74,11 @@ export default async function TrailDetailPage({
   if (trailResult.rows.length === 0) notFound();
   const trail = trailResult.rows[0];
   const includeCycling = userPrefsResult.rows[0]?.include_cycling ?? false;
+  // Gap-fill/mark-complete/manual-segment are basic-tier features (trial +
+  // active) — locked once a trial lapses into grace_period. See the
+  // 2026-09-30 feature-gating request; TrailActions.tsx does the actual
+  // rendering, the API routes it calls do the real enforcement.
+  const basicAccess = hasBasicAccess(userPrefsResult.rows[0]?.subscription_status);
 
   const [manualGeoResult, manualListResult] = await Promise.all([
     query<{ manual_geojson: object | null; manual_distance_m: number }>(
@@ -187,6 +193,7 @@ export default async function TrailDetailPage({
           initialManualSegments={manualSegments}
           hasProgress={pct > 0}
           activities={activities}
+          hasBasicAccess={basicAccess}
         >
           {/* Trail header */}
           <div className="mb-5 mt-5">

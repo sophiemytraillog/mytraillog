@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { cookies } from "next/headers";
 import { pool } from "@/lib/db";
+import { hasPremiumAccess } from "@/lib/subscription";
 import {
   getActivityTrailMatches,
   writeTrailDescription,
@@ -65,6 +66,20 @@ export async function GET(request: NextRequest) {
 
       try {
         const startedAt = Date.now();
+
+        // Historical description backfill is paid-only (2026-09-30 feature
+        // gating) — unlike sync/matching/new-activity descriptions, trial
+        // users don't get this one. UpdateDescriptionsButton.tsx gates the
+        // UI itself so this route is never normally called without premium
+        // access; this is defense-in-depth against a direct request.
+        const { rows: [statusRow] } = await pool.query<{ subscription_status: string }>(
+          "SELECT subscription_status FROM users WHERE id = $1",
+          [userId]
+        );
+        if (!statusRow || !hasPremiumAccess(statusRow.subscription_status)) {
+          send("error", { message: "Historical descriptions are a premium feature - subscribe to unlock" });
+          return;
+        }
 
         const { rows: [userPrefs] } = await pool.query<{ description_mode: DescriptionMode }>(
           "SELECT description_mode FROM users WHERE id = $1",

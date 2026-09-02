@@ -2,6 +2,8 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { type PoolClient } from "pg";
 import { pool } from "@/lib/db";
+import { hasBasicAccess } from "@/lib/subscription";
+import { getSubscriptionStatus } from "@/lib/subscription-db";
 
 export const maxDuration = 60;
 
@@ -11,6 +13,18 @@ export async function POST(
 ) {
   const userId = cookies().get("strava_user_id")?.value;
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  // Gap-fill is part of the "basic" feature set (trial + active), locked
+  // once a trial lapses into grace_period — see the 2026-09-30 feature-
+  // gating request. TrailActions.tsx gates the button itself; this is
+  // defense-in-depth against a direct request.
+  if (!hasBasicAccess(await getSubscriptionStatus(userId))) {
+    return NextResponse.json(
+      { error: "Subscribe to unlock this feature", locked: true },
+      { status: 403 }
+    );
+  }
+
   const fillAll = new URL(req.url).searchParams.get("all") === "true";
 
   const client = await pool.connect();

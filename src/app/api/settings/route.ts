@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { query } from "@/lib/db";
 import { sendNotificationEmail } from "@/lib/email";
+import { hasBasicAccess } from "@/lib/subscription";
+import { getSubscriptionStatus } from "@/lib/subscription-db";
 
 export async function PATCH(request: NextRequest) {
   const userId = cookies().get("strava_user_id")?.value;
@@ -33,6 +35,17 @@ export async function PATCH(request: NextRequest) {
   if (include_cycling !== undefined) {
     if (typeof include_cycling !== "boolean") {
       return NextResponse.json({ error: "Invalid value" }, { status: 400 });
+    }
+    // Basic-feature gate (2026-09-30) — same as gap-fill/mark-complete;
+    // locked once a trial lapses into grace_period. Only this toggle is
+    // gated, not the other preference fields below (description mode,
+    // distance unit, contact email) — those are just metadata and don't
+    // themselves cause new work to happen.
+    if (!hasBasicAccess(await getSubscriptionStatus(userId))) {
+      return NextResponse.json(
+        { error: "Subscribe to unlock this feature", locked: true },
+        { status: 403 }
+      );
     }
     await query(
       "UPDATE users SET include_cycling = $1 WHERE id = $2",

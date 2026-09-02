@@ -15,6 +15,7 @@ import {
   type DescriptionMode,
 } from "@/lib/trail-descriptions";
 import { logSyncEvent } from "@/lib/sync-log";
+import { hasBasicAccess } from "@/lib/subscription";
 
 // Finding which of ~1,180 trails are near a BATCH of activities (as opposed
 // to computeTrailProgress's own per-trail queries, which are always scoped
@@ -98,7 +99,8 @@ export type SyncChunkResult =
   | { status: "complete"; fetched: number; saved: number; newDbIds: string[] }
   | { status: "partial"; fetched: number; saved: number; newDbIds: string[] }
   | { status: "rate_limited"; message: string }
-  | { status: "error"; message: string };
+  | { status: "error"; message: string }
+  | { status: "subscription_required"; message: string };
 
 /**
  * Fetches and stores up to `budgetMs` worth of a user's Strava activity
@@ -131,6 +133,23 @@ export async function runSyncChunk(
     logSyncEvent(userId, "sync_chunk_result", { ...result, newDbIds: result.status === "complete" || result.status === "partial" ? result.newDbIds.length : undefined });
     return result;
   };
+
+  // Checked here, not just in the callers (the SSE route, the dashboard's
+  // self-heal nudge, the cron stale-sync sweep) — this is the one place
+  // ALL of them funnel through before any Strava API call or DB write, so
+  // it's the single enforcement point for "sync stops" once a trial/
+  // subscription lapses (2026-09-30 feature-gating request), rather than
+  // three separate checks that could drift out of sync with each other.
+  // Runs before sync_status is ever touched (see the UPDATE below), so a
+  // gated user's sync_status is left exactly as it was — no risk of this
+  // check itself leaving someone stuck in 'syncing'.
+  const { rows: [user] } = await pool.query<{ subscription_status: string }>(
+    "SELECT subscription_status FROM users WHERE id = $1",
+    [userId]
+  );
+  if (!user || !hasBasicAccess(user.subscription_status)) {
+    return logAndReturn({ status: "subscription_required", message: "Subscribe to keep tracking" });
+  }
 
   try {
     const accessToken = await getValidAccessToken(userId);
