@@ -615,6 +615,21 @@ export async function processDescriptionBatch(
     [userId]
   );
 
+  // Computed once per call, not per activity — whether this user's trail
+  // matching has fully caught up (every trail has a trail_match_checks
+  // row). Determines what a zero-real-match result below actually means:
+  // see the comment at that check.
+  const { rows: [matchStatus] } = await dbPool.query<{ matching_complete: boolean }>(
+    `SELECT NOT EXISTS (
+       SELECT 1 FROM trails t
+       WHERE NOT EXISTS (
+         SELECT 1 FROM trail_match_checks c WHERE c.user_id = $1 AND c.trail_id = t.id
+       )
+     ) AS matching_complete`,
+    [userId]
+  );
+  const matchingComplete = matchStatus?.matching_complete ?? false;
+
   const limiter = new RateLimiter(100);
   let checkedThisBatch = 0;
   let updatedThisBatch = 0;
@@ -642,11 +657,35 @@ export async function processDescriptionBatch(
     try {
       const matches = await getActivityTrailMatches(userId, act.id, undefined, dbPool);
 
-      // Ambiguous — could be a false-positive candidate (the loose
-      // backfill-candidate insert) or matching genuinely hasn't landed a
-      // confirmed progress row yet. Leave unchecked either way so a later
-      // call can pick it back up once it's real.
-      if (matches.length === 0) continue;
+      if (matches.length === 0) {
+        // Root cause of a 2026-08-29 stall confirmed on Luke Barton-Davis's
+        // account (structural, not account-specific — see the investigation
+        // that led here): this candidate came from activity_trail_matches'
+        // loose/coarse bbox pre-filter, but the precise check above found
+        // zero real overlap. The query above has no cursor and always
+        // re-fetches every not-yet-written candidate newest-first, so a
+        // confirmed-false candidate left eligible forever gets
+        // re-examined on EVERY future call — Luke had 139 of them sitting
+        // in front of 164 genuine unwritten matches, so every run burned
+        // its whole time budget re-litigating the same false positives and
+        // never reached the real ones: 5 days, ~50 checks/run, 0 writes.
+        //
+        // Only safe to retire once matching is fully caught up for this
+        // user, though: while trail_match_checks is still incomplete, a
+        // zero-match result here might still be pending rather than
+        // permanently false — matching could land a real one later. Once
+        // every trail has been checked, there's no "later" left to wait
+        // for, so a zero-match result is definitively permanent, same as
+        // writeTrailDescription's own "nothing relevant to write" paths
+        // below already retire an activity by setting this flag.
+        if (matchingComplete) {
+          await dbPool.query(
+            "UPDATE activities SET strava_description_updated = TRUE WHERE id = $1",
+            [act.id]
+          );
+        }
+        continue;
+      }
 
       if (!(await reserveBackfillSlot())) {
         budgetExhausted = true;
