@@ -117,6 +117,16 @@ export default async function Dashboard({
     redirect("/activate");
   }
 
+  // Blocking gate: 'expired' accounts (a returning athlete whose previous
+  // account was deleted after their trial + grace_period ran out — see
+  // strava/callback/route.ts's deleted_users check, 2026-09-30) get no
+  // dashboard at all, not even a locked/read-only one — there's nothing to
+  // show them since their old row is gone and this is a brand-new one.
+  // Straight to /subscribe until they pay.
+  if (userId && subscriptionStatus === "expired") {
+    redirect("/subscribe");
+  }
+
   // Self-heal nudge: resume automatically on this visit if the last sync
   // attempt looks abandoned, exactly as if the user had clicked "Sync
   // Activities" themselves — runSyncChunk resumes from wherever the stored

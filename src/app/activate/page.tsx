@@ -23,6 +23,11 @@ export default async function ActivatePage() {
   );
   const user = rows[0];
   if (!user) redirect("/");
+  // 'expired' (a returning athlete whose previous account was deleted —
+  // see strava/callback/route.ts's deleted_users check, 2026-09-30) has no
+  // trial to activate at all — straight to /subscribe instead, not this
+  // trial-activation form.
+  if (user.subscription_status === "expired") redirect("/subscribe");
   if (user.contact_email || user.subscription_status === "active") redirect("/dashboard");
 
   return <ActivateForm />;

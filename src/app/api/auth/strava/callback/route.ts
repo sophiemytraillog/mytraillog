@@ -72,19 +72,45 @@ export async function GET(request: NextRequest) {
     console.warn("[strava/callback] Detailed athlete fetch errored:", err);
   }
 
+  // A strava_id that's been deleted before (self-service delete, or the
+  // trial-expiry grace_period cleanup — see account-deletion.ts) doesn't
+  // get a second free trial on reconnect: their old row is gone, so
+  // without this check the INSERT below would look exactly like a
+  // brand-new signup. Cheap either way (one indexed PK lookup), and only
+  // actually changes anything for the INSERT branch — see the comment
+  // below on why the ON CONFLICT branch never touches these fields.
+  const { rows: deletedRows } = await query<{ strava_id: string }>(
+    "SELECT strava_id FROM deleted_users WHERE strava_id = $1",
+    [athlete.id]
+  );
+  const isReturningDeletedUser = deletedRows.length > 0;
+  if (isReturningDeletedUser) {
+    console.log(`[strava/callback] Athlete ${athlete.id} previously deleted — no second trial, starting 'expired'`);
+  }
+
   // subscription_status/trial_started_at/trial_ends_at only appear in the
   // INSERT column list, not the ON CONFLICT SET clause below — deliberate,
   // so a returning user reconnecting (token refresh, scope change, etc.)
   // never has their trial clock reset or their founding-tester 'active'
   // status touched. See schema.sql's trial-tracking comment (2026-09-02,
   // when the invite-code gate came off).
+  //
+  // trialFieldsSql is one of two fixed string constants chosen above, never
+  // user input, so interpolating it directly here carries no injection risk
+  // — needed because "no trial at all" (a bare 'expired', NULL, NULL) isn't
+  // expressible as a placeholder value the same way as the normal
+  // 'trial'/NOW()/+1-month case.
+  const trialFieldsSql = isReturningDeletedUser
+    ? "'expired', NULL, NULL"
+    : "'trial', NOW(), NOW() + INTERVAL '1 month'";
+
   const upsertUserSql = `INSERT INTO users (
       strava_id, username, first_name, last_name, profile_image_url,
       strava_access_token, strava_refresh_token, strava_token_expires_at,
       strava_scope, measurement_preference,
       subscription_status, trial_started_at, trial_ends_at
     ) VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8), $9, $10,
-      'trial', NOW(), NOW() + INTERVAL '1 month')
+      ${trialFieldsSql})
     ON CONFLICT (strava_id) DO UPDATE SET
       username                = EXCLUDED.username,
       first_name              = EXCLUDED.first_name,

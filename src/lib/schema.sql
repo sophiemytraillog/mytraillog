@@ -431,6 +431,22 @@ WHERE trial_started_at IS NULL AND subscription_status != 'active';
 -- conditional on having an email, only the courtesy reminders are.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_email TEXT;
 
+-- ── deleted_users (2026-09-30) ────────────────────────────────
+-- Records every strava_id whose account has ever been deleted — via the
+-- self-service /api/account/delete route, or trial-lifecycle.ts's 14-day
+-- grace_period cleanup — so a returning athlete reconnecting later isn't
+-- given a second free trial (see strava/callback/route.ts's
+-- deleted_users check). Deliberately just the two columns asked for: no FK
+-- to users(id), since the whole point is that row is gone by the time this
+-- one matters. ON CONFLICT DO UPDATE on insert (see account-deletion.ts)
+-- refreshes deleted_at if the same strava_id is ever recorded twice
+-- (shouldn't normally happen — a deleted account can't be deleted again —
+-- but harmless if it ever does).
+CREATE TABLE IF NOT EXISTS deleted_users (
+  strava_id  BIGINT      PRIMARY KEY,
+  deleted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- ── Row-Level Security ──────────────────────────────────────
 -- The server connects as the postgres role which has BYPASSRLS in Supabase,
 -- so all server-side queries are unaffected. These settings block direct
@@ -447,6 +463,7 @@ ALTER TABLE sync_log                   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trail_match_checks         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE invite_codes               ENABLE ROW LEVEL SECURITY;
 ALTER TABLE waitlist                   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE deleted_users              ENABLE ROW LEVEL SECURITY;
 
 -- Pre-populated beta codes for early testers. Fixed values + ON CONFLICT DO
 -- NOTHING so re-running this idempotent migration never rotates or
