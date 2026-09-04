@@ -7,7 +7,7 @@ export default function ConnectStrava() {
           compliance), so the requested CTA copy sits as a heading above it
           instead. */}
       <p className="text-[#2C2520] font-semibold text-sm mb-3">
-        Connect with Strava - free for 1 month
+        Connect with Strava
       </p>
       <a
         href="/api/auth/strava"
@@ -20,9 +20,6 @@ export default function ConnectStrava() {
           style={{ height: "48px", width: "auto" }}
         />
       </a>
-      <p className="text-[#8A7F72] text-xs mt-3">
-        Full access free for 1 month. Then £12.99/year to keep tracking.
-      </p>
     </div>
   );
 }
