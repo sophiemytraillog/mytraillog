@@ -136,9 +136,10 @@ export default function Home({
   searchParams?: { error?: string; deleted?: string };
 }) {
   return (
-    <div className="min-h-screen">
+    <>
+    <div className="min-h-dvh flex flex-col">
       {/* ── Navigation ─────────────────────────────────────────── */}
-      <nav className="px-6 py-5 flex items-center border-b border-[#E5DED4]">
+      <nav className="shrink-0 px-6 py-5 [@media(max-height:480px)]:py-2 flex items-center border-b border-[#E5DED4]">
         <div className="flex items-center gap-2 text-[#2C2520]">
           <LogoIcon className="w-5 h-5 text-[#C4652A]" />
           <span className="font-semibold text-base tracking-tight">My Trail Log</span>
@@ -146,7 +147,10 @@ export default function Home({
       </nav>
 
       {/* ── Hero ────────────────────────────────────────────────── */}
-      <section className="relative py-10 md:py-14 flex flex-col justify-center overflow-hidden">
+      {/* Fills exactly the viewport height left over below the nav, so the
+          CTA (pinned to the bottom via justify-between below) is always
+          visible without scrolling on first load, on both mobile and desktop. */}
+      <section className="relative flex-1 flex flex-col overflow-hidden">
         {/* Subtle warm radial glow */}
         <div
           className="absolute inset-0 pointer-events-none"
@@ -165,30 +169,33 @@ export default function Home({
           }}
         />
 
-        {/* Hero content */}
-        <div className="relative z-10 text-center px-6 max-w-4xl mx-auto">
-          <ConnectErrorBanner error={searchParams?.error} />
-          <DeletedBanner deleted={searchParams?.deleted} />
+        {/* Hero content: top group and CTA pinned to opposite ends */}
+        <div className="relative z-10 flex-1 flex flex-col justify-between text-center px-6 py-8 md:py-12 [@media(max-height:480px)]:py-3 max-w-4xl mx-auto w-full">
+          <div>
+            <ConnectErrorBanner error={searchParams?.error} />
+            <DeletedBanner deleted={searchParams?.deleted} />
 
-          <div className="inline-flex items-center gap-2 bg-[#C4652A]/10 border border-[#C4652A]/20 text-[#C4652A] text-xs font-semibold tracking-[0.12em] uppercase px-4 py-2 rounded-full mb-5">
-            <span className="w-1.5 h-1.5 bg-[#C4652A] rounded-full inline-block" />
-            Britain&apos;s long-distance trail tracker
+            <div className="inline-flex items-center gap-2 bg-[#C4652A]/10 border border-[#C4652A]/20 text-[#C4652A] text-xs font-semibold tracking-[0.12em] uppercase px-4 py-2 rounded-full mb-6 [@media(max-height:480px)]:mb-2">
+              <span className="w-1.5 h-1.5 bg-[#C4652A] rounded-full inline-block" />
+              Britain&apos;s long-distance trail tracker
+            </div>
+
+            <h1 className="text-4xl sm:text-5xl lg:text-6xl [@media(max-height:480px)]:text-2xl font-extrabold text-[#2C2520] leading-[1.04] tracking-tight mb-5 [@media(max-height:480px)]:mb-2">
+              Track your progress across<br />
+              Britain&apos;s greatest trails
+            </h1>
+
+            <p className="text-[#8A7F72] text-base md:text-lg max-w-lg mx-auto leading-relaxed [@media(max-height:480px)]:hidden">
+              Connect your Strava account and My Trail Log automatically maps your progress across the
+              UK&apos;s National Trails and 1,000+ long-distance paths - from the West Highland Way to the
+              South Downs Way. No extra tracking required.
+            </p>
           </div>
-
-          <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold text-[#2C2520] leading-[1.04] tracking-tight mb-4">
-            Track your progress across<br />
-            Britain&apos;s greatest trails
-          </h1>
-
-          <p className="text-[#8A7F72] text-base md:text-lg max-w-lg mx-auto mb-6 leading-relaxed">
-            Connect your Strava account and My Trail Log automatically maps your progress across the
-            UK&apos;s National Trails and 1,000+ long-distance paths - from the West Highland Way to the
-            South Downs Way. No extra tracking required.
-          </p>
 
           <ConnectStrava />
         </div>
       </section>
+    </div>
 
       {/* ── How it works ────────────────────────────────────────── */}
       <section className="py-24 px-6 border-t border-[#E5DED4]">
@@ -313,6 +320,6 @@ export default function Home({
           </div>
         </div>
       </footer>
-    </div>
+    </>
   );
 }
