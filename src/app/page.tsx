@@ -146,7 +146,7 @@ export default function Home({
       </nav>
 
       {/* ── Hero ────────────────────────────────────────────────── */}
-      <section className="relative py-24 md:py-32 flex flex-col justify-center overflow-hidden">
+      <section className="relative py-10 md:py-14 flex flex-col justify-center overflow-hidden">
         {/* Subtle warm radial glow */}
         <div
           className="absolute inset-0 pointer-events-none"
@@ -170,17 +170,17 @@ export default function Home({
           <ConnectErrorBanner error={searchParams?.error} />
           <DeletedBanner deleted={searchParams?.deleted} />
 
-          <div className="inline-flex items-center gap-2 bg-[#C4652A]/10 border border-[#C4652A]/20 text-[#C4652A] text-xs font-semibold tracking-[0.12em] uppercase px-4 py-2 rounded-full mb-8">
+          <div className="inline-flex items-center gap-2 bg-[#C4652A]/10 border border-[#C4652A]/20 text-[#C4652A] text-xs font-semibold tracking-[0.12em] uppercase px-4 py-2 rounded-full mb-5">
             <span className="w-1.5 h-1.5 bg-[#C4652A] rounded-full inline-block" />
             Britain&apos;s long-distance trail tracker
           </div>
 
-          <h1 className="text-5xl sm:text-6xl lg:text-[5.25rem] font-extrabold text-[#2C2520] leading-[1.04] tracking-tight mb-6">
+          <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold text-[#2C2520] leading-[1.04] tracking-tight mb-4">
             Track your progress across<br />
             Britain&apos;s greatest trails
           </h1>
 
-          <p className="text-[#8A7F72] text-lg md:text-xl max-w-lg mx-auto mb-10 leading-relaxed">
+          <p className="text-[#8A7F72] text-base md:text-lg max-w-lg mx-auto mb-6 leading-relaxed">
             Connect your Strava account and My Trail Log automatically maps your progress across the
             UK&apos;s National Trails and 1,000+ long-distance paths - from the West Highland Way to the
             South Downs Way. No extra tracking required.
