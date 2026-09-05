@@ -482,14 +482,13 @@ export async function writeTrailDescription(
 // Strava's rate limit is enforced per-application across every user combined
 // — this backlog scan is the one feature that can burn through it fastest,
 // so it gets its own fixed daily share rather than competing with normal
-// syncs/webhooks for whatever's left. Raised 250 -> 750, 2026-08-21: normal
-// day-to-day usage (syncs + webhooks) only runs 100-300 calls/day against
-// the app's real 4,000/day limit, so 250 updates/day (500 calls, GET+PUT
-// per update) was leaving most of that headroom unused while an 8,900-
-// activity description backlog sat at a 36-day drain time. 750 updates/day
-// = 1,500 calls/day, still comfortably under 4,000 with room for normal
-// traffic, and cuts the backlog to ~12 days.
-const DAILY_UPDATE_BUDGET = 750;
+// syncs/webhooks for whatever's left. Raised 250 -> 750, 2026-08-21 (see git
+// history for that reasoning). Raised 750 -> 2,000, 2026-09-04, to match
+// Strava's updated per-app daily rate limit — 2,000 updates/day = 4,000
+// calls/day (GET+PUT per update), leaving normal day-to-day usage (syncs +
+// webhooks, historically 100-300 calls/day) plenty of headroom within the
+// new ceiling while cutting backlog drain time further.
+const DAILY_UPDATE_BUDGET = 2000;
 
 // Reserves one attempt against the app-wide daily backfill budget, paced
 // evenly across the day (via an elapsed-fraction ceiling) rather than

@@ -92,7 +92,7 @@ export async function runMatchBatchAndChain(
 
   let result;
   try {
-    result = await matchNextBatch(userId, CHAIN_BATCH_SIZE, CHAIN_TIME_BUDGET_MS);
+    result = await matchNextBatch(userId, CHAIN_BATCH_SIZE, CHAIN_TIME_BUDGET_MS, matchBatchPool);
   } catch (err) {
     console.error(`[match-chain] Batch failed for user ${userId} at hop ${hop}:`, err);
     return;

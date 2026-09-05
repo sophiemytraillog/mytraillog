@@ -26,11 +26,16 @@ interface UserStats {
 // has almost certainly been abandoned client-side (browser tab closed,
 // navigated away, backgrounded on mobile) partway through a multi-chunk
 // sync — there's no server-side process that would still be running after
-// this much silence. Comfortably longer than one chunk's ~45s budget plus
-// margin for Strava API latency, short enough that a genuinely still-active
-// sync's own next heartbeat (after every fetched page) resets the clock
-// well before this fires.
-const STALE_SYNC_THRESHOLD_MINUTES = 3;
+// this much silence. sync_progress_at is updated after every fetched Strava
+// page (see sync-engine.ts), which happens every second or two under normal
+// conditions, so a genuinely still-active sync's heartbeat resets this clock
+// well before it fires.
+//
+// Tightened from 3 minutes to 1 minute (2026-09-04) — new users are the
+// most likely to hit a stalled sync (they're the ones watching a large
+// first-time backfill happen, most likely to be the tab that gets closed
+// mid-flight) and were also the ones waiting longest to see it self-heal.
+const STALE_SYNC_THRESHOLD_SECONDS = 60;
 
 export default async function Dashboard({
   searchParams,
@@ -76,7 +81,7 @@ export default async function Dashboard({
                 u.strava_scope,
                 u.include_cycling,
                 (u.sync_status = 'syncing'
-                  AND u.sync_progress_at < NOW() - INTERVAL '${STALE_SYNC_THRESHOLD_MINUTES} minutes'
+                  AND u.sync_progress_at < NOW() - INTERVAL '${STALE_SYNC_THRESHOLD_SECONDS} seconds'
                 ) AS stale_sync,
                 u.subscription_status,
                 u.trial_ends_at,
