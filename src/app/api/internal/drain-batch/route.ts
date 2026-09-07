@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runExternalDrainBatch } from "@/lib/description-chain";
+import { runExternalMatchDrainBatch } from "@/lib/match-chain";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -19,6 +20,17 @@ export const maxDuration = 60;
 // GET (not POST) specifically because external cron services vary in how
 // easily they support a JSON POST body — this endpoint needs none, so GET
 // keeps setup to "URL + one header" for whatever service ends up calling it.
+//
+// Trail matching added to this same call, 2026-09-07: the reactive match
+// chain only fires off a sync or dashboard visit, and the daily cron drain
+// is a single small hop once a day — a user who does neither (confirmed:
+// Luke Davis sat at 236/1,182 trails checked for two full days, untouched)
+// never got any further matching progress at all between those triggers.
+// Piggybacking one small matching batch onto every description-drain call
+// means matching now advances on the exact same ~2-minute external cadence
+// as descriptions, with no separate scheduler to set up. See
+// runExternalMatchDrainBatch's own comment for why its budget is kept small
+// relative to the description phase's.
 export async function GET(request: NextRequest) {
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret) {
@@ -30,6 +42,7 @@ export async function GET(request: NextRequest) {
     console.warn("[internal/drain-batch] CRON_SECRET not set — endpoint is unauthenticated");
   }
 
-  const summary = await runExternalDrainBatch();
-  return NextResponse.json(summary);
+  const descriptions = await runExternalDrainBatch();
+  const matching = await runExternalMatchDrainBatch();
+  return NextResponse.json({ descriptions, matching });
 }

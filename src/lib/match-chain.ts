@@ -389,3 +389,108 @@ export async function runMatchDrainHop(hop = 0): Promise<void> {
 export function triggerMatchDrain(): Promise<void> {
   return runMatchDrainHop(0);
 }
+
+// ── External-scheduler match drain (2026-09-07) ─────────────────────────────
+//
+// The daily cron (resume-stuck-syncs) only calls triggerMatchDrain once a
+// day, and MATCH_DRAIN_CHAINING_ENABLED being false means that's a single
+// bounded hop — one candidate, one small batch — then it stops. Meanwhile
+// the REACTIVE chain (runMatchBatchAndChain) only ever fires off the back of
+// a sync or a dashboard visit, so a user who doesn't do either (like Luke
+// Davis sitting at 236/1,182 trails checked for two straight days, see the
+// investigation this fixes) never gets any further progress at all between
+// cron runs. The description backlog already solved exactly this shape of
+// problem with runExternalDrainBatch, driven by an external scheduler
+// (cron-job.org) hitting /api/internal/drain-batch every ~2 minutes — this
+// is the same fix applied to matching: one bounded, non-self-dispatching
+// batch per call, safe for an external scheduler to hit on a tight interval
+// with no shared invocation lineage (so Vercel's loop-detection protection
+// never enters into it, same reasoning as runExternalDrainBatch above).
+//
+// Deliberately reuses pickNextMatchDrainCandidate (least-recently-swept
+// first, same round-robin fairness as the daily drain) and matchBatchPool
+// (not the shared `pool`) — same reasoning as runMatchDrainHop throughout
+// this file.
+//
+// Budget kept small (not EXTERNAL_DRAIN_BATCH_TIME_BUDGET_MS-sized) because
+// this runs in the SAME external-scheduler call as the description drain —
+// see drain-batch/route.ts, which calls both in one request. cron-job.org
+// has a hard 30s request timeout independent of this route's own 60s
+// maxDuration (see description-chain.ts's own comment on this).
+//
+// This is a NOMINAL budget only, same caveat as DRAIN_HOP_TIME_BUDGET_MS
+// above — matchNextBatch checks it BETWEEN trails, not during one, and a
+// single trail's own MATCH_SQL carries its own separate 3-minute
+// statement_timeout (see computeTrailProgress in match-trails.ts). Confirmed
+// directly while wiring this up: a combined call can legitimately run
+// 30-40s wall-clock even with this budget at 6s, whenever either phase
+// lands on a slow individual query (an OAuth token refresh in the
+// description phase, or one costly trail in this one). That's an accepted,
+// pre-existing characteristic of both drains, not something this budget can
+// fully bound — cron-job.org logging an occasional timeout on a call that
+// actually completed and checkpointed correctly server-side is the same
+// tradeoff description-chain.ts's own comment already documents. Kept small
+// anyway so the COMMON case (no slow query) stays comfortably under 30s.
+const EXTERNAL_MATCH_DRAIN_TIME_BUDGET_MS = 6_000;
+
+export interface ExternalMatchDrainResult {
+  candidateId: string | null;
+  checkedThisBatch: number;
+  matchedThisBatch: number;
+  done: boolean; // true only when pickNextMatchDrainCandidate found nobody left to drain
+}
+
+/**
+ * Entry point for the external scheduler — one HTTP call in, one JSON
+ * response out, no self-dispatch, exactly one candidate's worth of work
+ * (unlike runExternalDrainBatch, which loops across multiple candidates —
+ * matching's own per-trail cost is high enough, and the external cadence
+ * frequent enough, that one candidate per call is plenty; see the comment
+ * above pickNextMatchDrainCandidate for how slow a single candidate's own
+ * discovery query can already be).
+ */
+export async function runExternalMatchDrainBatch(): Promise<ExternalMatchDrainResult> {
+  const candidate = await pickNextMatchDrainCandidate();
+  if (!candidate) {
+    return { candidateId: null, checkedThisBatch: 0, matchedThisBatch: 0, done: true };
+  }
+
+  let result;
+  try {
+    result = await matchNextBatch(
+      candidate.id,
+      DRAIN_HOP_BATCH_SIZE,
+      EXTERNAL_MATCH_DRAIN_TIME_BUDGET_MS,
+      matchBatchPool
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[external-match-drain] Batch failed for ${candidate.first_name ?? candidate.id}:`, err);
+    logSyncEvent(ADMIN_USER_ID, "external_match_drain_batch", {
+      outcome: "hard_failure",
+      candidateId: candidate.id,
+      message,
+    });
+    return { candidateId: candidate.id, checkedThisBatch: 0, matchedThisBatch: 0, done: false };
+  }
+
+  // Same reasoning as runMatchDrainHop's own logSyncEvent call —
+  // pickNextMatchDrainCandidate's ORDER BY reads this back out to decide who's
+  // least recently swept, so skipping it would mean this candidate gets
+  // re-picked forever instead of rotating to the next-neediest account.
+  logSyncEvent(candidate.id, "cron_match_sweep", {
+    triggeredBy: "external-match-drain",
+    checkedThisBatch: result.checkedThisBatch,
+    matchedThisBatch: result.matchedThisBatch,
+    totalChecked: result.totalChecked,
+    totalTrails: result.totalTrails,
+    done: result.done,
+  });
+
+  return {
+    candidateId: candidate.id,
+    checkedThisBatch: result.checkedThisBatch,
+    matchedThisBatch: result.matchedThisBatch,
+    done: false,
+  };
+}
