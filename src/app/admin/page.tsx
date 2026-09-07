@@ -4,6 +4,7 @@ import { query } from "@/lib/db";
 import { ADMIN_USER_ID } from "@/lib/admin";
 import RematchButton from "./RematchButton";
 import GenerateInviteCodeButton from "./GenerateInviteCodeButton";
+import SystemHealthButton from "./SystemHealthButton";
 
 // Keep in sync with DAILY_UPDATE_BUDGET in src/lib/trail-descriptions.ts —
 // backfill_api_usage is the only Strava call counter this app keeps; there's no
@@ -182,7 +183,12 @@ export default async function AdminPage() {
     <div className="min-h-screen bg-[#FAF8F5] px-6 py-10">
       <div className="max-w-5xl mx-auto">
         <h1 className="text-2xl font-bold text-[#2C2520] tracking-tight mb-1">Admin</h1>
-        <p className="text-[#8A7F72] text-sm mb-8">Internal stats - visible only to your account.</p>
+        <p className="text-[#8A7F72] text-sm mb-4">Internal stats - visible only to your account.</p>
+
+        {/* ── System Health ─────────────────────────────────────────── */}
+        <div className="mb-8">
+          <SystemHealthButton />
+        </div>
 
         {/* ── Stat cards ─────────────────────────────────────────── */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mb-10">
