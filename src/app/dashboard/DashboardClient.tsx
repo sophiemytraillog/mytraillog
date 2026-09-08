@@ -235,6 +235,32 @@ export default function DashboardClient({
     }
   }
 
+  // Streams an SSE endpoint's `message` payloads into the backfill status
+  // banner, shared by both directions of the cycling toggle below.
+  async function streamCyclingStatus(url: string) {
+    const res = await fetch(url);
+    if (!res.body) return;
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const parts = buf.split("\n\n");
+      buf = parts.pop() ?? "";
+      for (const part of parts) {
+        const dataLine = part.split("\n").find(l => l.startsWith("data:"));
+        if (!dataLine) continue;
+        try {
+          const payload = JSON.parse(dataLine.slice(5));
+          if (payload.message) setBackfillStatus(payload.message);
+        } catch { /* ignore */ }
+      }
+    }
+    setTimeout(() => setBackfillStatus(null), 4000);
+  }
+
   async function toggleCyclingActivities(enabled: boolean) {
     setSavingCycling(true);
     setCyclingEnabled(enabled);
@@ -246,27 +272,15 @@ export default function DashboardClient({
       });
       if (enabled) {
         setBackfillStatus("Scanning for cycling activities…");
-        const res = await fetch("/api/settings/backfill-cycling");
-        if (!res.body) return;
-        const reader = res.body.getReader();
-        const dec = new TextDecoder();
-        let buf = "";
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += dec.decode(value, { stream: true });
-          const parts = buf.split("\n\n");
-          buf = parts.pop() ?? "";
-          for (const part of parts) {
-            const dataLine = part.split("\n").find(l => l.startsWith("data:"));
-            if (!dataLine) continue;
-            try {
-              const payload = JSON.parse(dataLine.slice(5));
-              if (payload.message) setBackfillStatus(payload.message);
-            } catch { /* ignore */ }
-          }
-        }
-        setTimeout(() => setBackfillStatus(null), 4000);
+        await streamCyclingStatus("/api/settings/backfill-cycling");
+      } else {
+        // Removes activity_trail_matches rows that only existed because of
+        // now-excluded cycling activities and recomputes affected trails —
+        // otherwise those rows silently become "orphaned pairs" (a
+        // confirmed match with no user_trail_progress) the next time the
+        // health check runs. See cleanup-cycling/route.ts.
+        setBackfillStatus("Cleaning up cycling matches…");
+        await streamCyclingStatus("/api/settings/cleanup-cycling");
       }
     } finally {
       setSavingCycling(false);
