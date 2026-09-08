@@ -1,0 +1,56 @@
+name: Drain batch (descriptions + matching)
+
+# Replaces cron-job.org (2026-09-08) as the external scheduler that drives
+# /api/internal/drain-batch — see that route and description-chain.ts's
+# runExternalDrainBatch for why this needs to be an EXTERNAL scheduler at
+# all (Vercel's own self-dispatching chain hits Vercel's loop-detection
+# protection after 4-5 hops). cron-job.org kept stopping silently: confirmed
+# via sync_log ('external_drain_batch' events) that it ran reliably on its
+# ~2min cadence from 04:38-04:58 UTC on 2026-09-07, then went almost
+# entirely quiet for the rest of the day (a handful of stray calls, then
+# nothing for 5+ hours) — with the production endpoint itself verified
+# working correctly the whole time (a direct curl call during that gap
+# returned a normal 200 with real work done), so the stoppage was on
+# cron-job.org's side, not this app's.
+#
+# IMPORTANT — GitHub Actions' `schedule` trigger is explicitly documented
+# as best-effort, not exact: GitHub states scheduled workflows can be
+# delayed, and are further delayed or dropped entirely during periods of
+# high platform load, with delays of many minutes being commonly reported
+# at short intervals like the 2-minute cadence used here on weekdays. This
+# workflow is still worth having — GitHub Actions is a proper, heavily-used
+# platform (not a small free-tier hobby scheduler) and a failed/skipped run
+# shows up in this repo's Actions tab with an optional failure-notification
+# email, which cron-job.org's free tier never offered — but it is NOT a
+# guarantee of exact 2-minute timing, and shouldn't be treated as one.
+on:
+  schedule:
+    # Weekdays (Mon-Fri), every 2 minutes, 03:00-06:58 UTC ("3am-7am").
+    - cron: "*/2 3-6 * * 1-5"
+    # Weekends (Sat-Sun), every 5 minutes, 03:00-06:55 UTC.
+    - cron: "*/5 3-6 * * 0,6"
+  # Manual trigger from the Actions tab — useful for confirming the
+  # endpoint + secret are wired up correctly without waiting on the
+  # schedule.
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  drain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Call drain-batch endpoint
+        # -f: fail (non-zero exit) on an HTTP error status, so a broken
+        # secret or a down deployment shows up as a failed run in the
+        # Actions tab. This only catches transport/auth-level failures —
+        # the route itself always returns 200 with a JSON summary even
+        # when an individual candidate's batch hit an internal error (same
+        # convention as this app's other health/drain routes, which use
+        # sync_log + email for that kind of logical-failure alerting
+        # rather than the HTTP status code).
+        run: |
+          curl -sf --max-time 90 \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            https://www.mytraillog.com/api/internal/drain-batch
