@@ -3,7 +3,6 @@ import { notFound } from "next/navigation";
 import { query } from "@/lib/db";
 import { ADMIN_USER_ID } from "@/lib/admin";
 import RematchButton from "./RematchButton";
-import GenerateInviteCodeButton from "./GenerateInviteCodeButton";
 import SystemHealthButton from "./SystemHealthButton";
 
 // Keep in sync with DAILY_UPDATE_BUDGET in src/lib/trail-descriptions.ts —
@@ -40,19 +39,6 @@ interface RequestedTrailRow {
 
 interface ApiUsageRow {
   calls_used: number;
-}
-
-interface InviteCodeRow {
-  code: string;
-  created_at: string;
-  used_by: string | null;
-  used_at: string | null;
-  used_by_name: string | null;
-}
-
-interface WaitlistRow {
-  email: string;
-  signed_up_at: string;
 }
 
 interface UserRow {
@@ -126,16 +112,6 @@ export default async function AdminPage() {
   const apiUsageResult = await query<ApiUsageRow>(
     `SELECT calls_used FROM backfill_api_usage WHERE usage_date = CURRENT_DATE`
   );
-  const inviteCodesResult = await query<InviteCodeRow>(
-    `SELECT ic.code, ic.created_at, ic.used_by, ic.used_at,
-            NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), '') AS used_by_name
-     FROM invite_codes ic
-     LEFT JOIN users u ON u.id = ic.used_by
-     ORDER BY ic.created_at DESC`
-  );
-  const waitlistResult = await query<WaitlistRow>(
-    `SELECT email, signed_up_at FROM waitlist ORDER BY signed_up_at DESC`
-  );
   // Two separate LEFT JOINs straight to users (one to activities, one to
   // user_trail_progress) multiply against each other before GROUP BY
   // collapses them — for a user with 4,017 activities and 170 matched
@@ -174,10 +150,6 @@ export default async function AdminPage() {
   const requestedTrails = requestedTrailsResult.rows;
   const callsUsedToday = apiUsageResult.rows[0]?.calls_used ?? 0;
   const users = usersResult.rows;
-  const inviteCodes = inviteCodesResult.rows;
-  const activeCodes = inviteCodes.filter((c) => !c.used_by);
-  const usedCodes = inviteCodes.filter((c) => c.used_by);
-  const waitlist = waitlistResult.rows;
 
   return (
     <div className="min-h-screen bg-[#FAF8F5] px-6 py-10">
@@ -197,66 +169,11 @@ export default async function AdminPage() {
           <StatCard label="New users (30d)" value={newUsers.new_month} />
           <StatCard label="Activities synced" value={totals.total_activities} />
           <StatCard label="Trail matches" value={totals.total_matches} />
-          <StatCard label="Active invite codes" value={String(activeCodes.length)} />
-          <StatCard label="Waitlist signups" value={String(waitlist.length)} />
           <StatCard
             label="Backfill API calls today"
             value={`${callsUsedToday}/${BACKFILL_DAILY_UPDATE_LIMIT * 2}`}
             sub="Description-update backlog only - shared across all users"
           />
-        </div>
-
-        {/* ── Invite codes & waitlist ────────────────────────────── */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-10">
-          <div className="bg-white border border-[#E5DED4] rounded-2xl overflow-hidden">
-            <div className="px-4 py-3 border-b border-[#E5DED4] flex items-center justify-between gap-3">
-              <p className="text-[#8A7F72] text-xs font-semibold tracking-widest uppercase">
-                Invite codes
-              </p>
-              <GenerateInviteCodeButton />
-            </div>
-            <div className="max-h-80 overflow-y-auto divide-y divide-[#E5DED4]">
-              {activeCodes.length === 0 && usedCodes.length === 0 && (
-                <p className="text-[#8A7F72] text-sm px-4 py-4">No invite codes yet.</p>
-              )}
-              {activeCodes.map((c) => (
-                <div key={c.code} className="flex items-center justify-between px-4 py-2.5">
-                  <span className="text-sm text-[#2C2520] font-mono tracking-wide">{c.code}</span>
-                  <span className="text-xs text-[#4A7C59] font-medium">Active</span>
-                </div>
-              ))}
-              {usedCodes.map((c) => (
-                <div key={c.code} className="flex items-center justify-between px-4 py-2.5">
-                  <span className="text-sm text-[#8A7F72] font-mono tracking-wide line-through decoration-[#8A7F72]/40">
-                    {c.code}
-                  </span>
-                  <span className="text-xs text-[#8A7F72] text-right">
-                    Used{c.used_by_name ? ` by ${c.used_by_name}` : ""}
-                    {c.used_at ? ` · ${formatDate(c.used_at)}` : ""}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="bg-white border border-[#E5DED4] rounded-2xl overflow-hidden">
-            <div className="px-4 py-3 border-b border-[#E5DED4]">
-              <p className="text-[#8A7F72] text-xs font-semibold tracking-widest uppercase">
-                Waitlist ({waitlist.length})
-              </p>
-            </div>
-            <div className="max-h-80 overflow-y-auto divide-y divide-[#E5DED4]">
-              {waitlist.length === 0 && (
-                <p className="text-[#8A7F72] text-sm px-4 py-4">No waitlist signups yet.</p>
-              )}
-              {waitlist.map((w) => (
-                <div key={w.email} className="flex items-center justify-between px-4 py-2.5">
-                  <span className="text-sm text-[#2C2520] truncate mr-3">{w.email}</span>
-                  <span className="text-xs text-[#8A7F72] shrink-0">{formatDate(w.signed_up_at)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-10">

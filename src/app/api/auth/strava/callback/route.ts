@@ -174,7 +174,6 @@ export async function GET(request: NextRequest) {
   );
 
   response.cookies.delete("strava_oauth_state");
-  response.cookies.delete("strava_invite_code");
 
   return response;
 }
