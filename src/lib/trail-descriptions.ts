@@ -144,27 +144,37 @@ export interface TrailMatch extends TrailMatchRow {
  * completion for trails with a manual fill.
  *
  * new_trail_distance_m ("how much of the trail did THIS activity add that
- * nothing earlier had") is cheapest when a before/after snapshot is
- * available: newGroundByTrailId is a snapshot of
- * user_trail_progress.completed_distance the caller took immediately
- * around its own (already-happening) computeTrailProgress call — see
- * snapshotTrailProgress in match-trails.ts — reusing computeTrailProgress's
- * own union instead of redoing it. Only meaningful when matching and
- * writing happen in the same call, with a well-defined "before" (webhook,
- * finishSync).
+ * nothing earlier had") always goes through computeNewGroundExcludingActivity
+ * — a real geometric computation, NOT activity_trail_distance_m (this
+ * activity's raw overlap regardless of prior coverage) and NOT a
+ * before/after delta of user_trail_progress.completed_distance either.
  *
- * When no snapshot is available — the deferred path: the automatic
- * description chain, the daily drain, the cron sweep, the manual "Update
- * historical activity descriptions" button, anywhere matching already
- * finished at some earlier point — falls back to
- * computeNewGroundExcludingActivity, a real (if more expensive) geometric
- * computation, NOT activity_trail_distance_m (this activity's raw overlap
- * regardless of prior coverage). That used to be the fallback and was
- * wrong every time after the first: root-caused via Dave Chase's second
- * "already covered this" report, 2026-08-21 — an activity written through
- * the new automatic chain reported 907.8m new on South Downs Way when his
- * other 506 nearby activities had already covered that exact stretch, true
- * new ground 0m.
+ * A before/after snapshot delta (webhook and finishSync used to take one
+ * around their own computeTrailProgress call, crediting the difference to
+ * whichever activity triggered it) was cheaper — reusing computeTrailProgress's
+ * own union instead of redoing it — but wrong whenever completed_distance
+ * itself was stale going in: computeTrailProgress recomputes a trail's FULL
+ * coverage from every matching activity, not just the new one, so if the
+ * stored value was behind (a trail that hadn't been touched by the
+ * staleness sweep in a while, an earlier partial failure, etc.) the delta
+ * conflates "catching up on old activities' coverage" with "this activity's
+ * own new ground" and credits it all to whichever activity happened to
+ * trigger the recompute. Root-caused via Sophie Davis, 2026-09-13: her
+ * "First Friday…" walk was reported as +1.3km new on Tandridge Border Path
+ * and +1.4km on Greenwich Meridian Trail; a fresh recompute of each trail
+ * with that walk excluded produced an identical total either way — the true
+ * new-ground contribution was 0m on both, and the reported figures were
+ * pure backlog catch-up from a stale stored completed_distance, not
+ * anything her walk actually added. computeNewGroundExcludingActivity can't
+ * be fooled this way because it never reads the stored completed_distance
+ * at all — it derives new ground straight from the other activities that
+ * exist in the database right now, every time, real-time write or deferred
+ * alike. That used to be the fallback and was wrong every time after the
+ * first for a related reason: root-caused via Dave Chase's second "already
+ * covered this" report, 2026-08-21 — an activity written through the
+ * automatic chain reported 907.8m new on South Downs Way when his other 506
+ * nearby activities had already covered that exact stretch, true new ground
+ * 0m.
  *
  * The per-trail loop below is HARD time-budgeted (ACTIVITY_NEW_GROUND_BUDGET_MS)
  * across ALL of an activity's candidate trails combined, not just each
@@ -201,7 +211,6 @@ function withDeadline<T>(promise: Promise<T>, ms: number, fallback: T): Promise<
 export async function getActivityTrailMatches(
   userId: string,
   activityDbId: string,
-  newGroundByTrailId?: Map<string, number>,
   dbPool: Pool = pool
 ): Promise<TrailMatch[]> {
   const { rows } = await dbPool.query<TrailMatchRow>(
@@ -249,24 +258,20 @@ export async function getActivityTrailMatches(
   const results: TrailMatch[] = [];
   const loopStartedAt = Date.now();
   for (const r of rows) {
+    const remaining = ACTIVITY_NEW_GROUND_BUDGET_MS - (Date.now() - loopStartedAt);
     let newGround: number;
-    if (newGroundByTrailId) {
-      newGround = newGroundByTrailId.get(r.trail_id) ?? 0;
+    if (remaining <= 0) {
+      newGround = 0;
     } else {
-      const remaining = ACTIVITY_NEW_GROUND_BUDGET_MS - (Date.now() - loopStartedAt);
-      if (remaining <= 0) {
-        newGround = 0;
-      } else {
-        newGround = await withDeadline(
-          computeNewGroundExcludingActivity(userId, activityDbId, r.trail_id, dbPool),
-          remaining,
-          0
+      newGround = await withDeadline(
+        computeNewGroundExcludingActivity(userId, activityDbId, r.trail_id, dbPool),
+        remaining,
+        0
+      );
+      if (Date.now() - loopStartedAt > ACTIVITY_NEW_GROUND_BUDGET_MS) {
+        console.warn(
+          `[trail-descriptions] Per-activity new-ground budget (${ACTIVITY_NEW_GROUND_BUDGET_MS}ms) exceeded for activity ${activityDbId} on trail ${r.trail_id} — falling back to 0 so the write can still complete on time`
         );
-        if (Date.now() - loopStartedAt > ACTIVITY_NEW_GROUND_BUDGET_MS) {
-          console.warn(
-            `[trail-descriptions] Per-activity new-ground budget (${ACTIVITY_NEW_GROUND_BUDGET_MS}ms) exceeded for activity ${activityDbId} on trail ${r.trail_id} — falling back to 0 so the write can still complete on time`
-          );
-        }
       }
     }
     results.push({ ...r, new_trail_distance_m: newGround });
@@ -654,7 +659,7 @@ export async function processDescriptionBatch(
     checkedThisBatch++;
 
     try {
-      const matches = await getActivityTrailMatches(userId, act.id, undefined, dbPool);
+      const matches = await getActivityTrailMatches(userId, act.id, dbPool);
 
       if (matches.length === 0) {
         // Root cause of a 2026-08-29 stall confirmed on Luke Barton-Davis's

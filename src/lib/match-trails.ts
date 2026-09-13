@@ -95,98 +95,78 @@ const ACTIVITY_MATCH_SQL = `
     AND ST_DWithin(a.geometry::geography, t_simplified.geometry::geography, ${BUFFER_METRES + SIMPLIFY_MARGIN})
   ON CONFLICT (activity_id, trail_id) DO NOTHING`;
 
-/**
- * Cheap indexed lookup of user_trail_progress.completed_distance for a set
- * of trails — no geometry involved. Callers take one snapshot right before
- * computeTrailProgress and another right after; the delta is exactly "how
- * much new ground got added by whatever activities computeTrailProgress
- * just merged in", which trail-descriptions.ts's getActivityTrailMatches
- * uses as an exact new_trail_distance_m instead of recomputing it via a
- * separate (and, confirmed in production, far too expensive) geometric
- * union — see the comment there for what that cost.
- */
-export async function snapshotTrailProgress(
-  userId: string,
-  trailIds: string[]
-): Promise<Map<string, number>> {
-  if (trailIds.length === 0) return new Map();
-  const { rows } = await pool.query<{ trail_id: string; completed_distance: number }>(
-    `SELECT trail_id, completed_distance FROM user_trail_progress
-     WHERE user_id = $1 AND trail_id = ANY($2::uuid[])`,
-    [userId, trailIds]
-  );
-  return new Map(rows.map((r) => [r.trail_id, r.completed_distance]));
-}
-
-// Two activities' 50 m buffers can only geometrically overlap if their raw
-// paths pass within 100 m (50+50) of each other — 150 m adds margin for
-// curvature/simplification slack without pulling in anything that couldn't
-// possibly share coverage with the target activity.
-const LOCAL_VICINITY_METRES = 150;
+// Bbox pre-filter margin for nearby_others_capped below — plain geometry
+// `&&` against a static column uses the GIST index (idx_activities_geometry);
+// the precise ST_Intersects/ST_Buffer check that follows does not. ~111 m,
+// safely wider than BUFFER_METRES so nothing that could actually overlap is
+// excluded before the accurate check runs.
+const NEARBY_OTHER_BBOX_MARGIN_DEGREES = 0.001;
 
 /**
  * Isolates ONE activity's true unique contribution to a trail's coverage —
- * used by trail-descriptions.ts's getActivityTrailMatches when no
- * before/after snapshot is available (the deferred description-writing
- * path: the automatic chain, the daily drain, the cron sweep, the manual
- * "Update historical activity descriptions" button — anywhere matching
- * already finished at some EARLIER point, not in the same call as the
- * write). That fallback used to just report the activity's whole raw
- * overlap with the trail as "new ground" — correct only the first time a
- * route is ever run, wrong every time after. Root-caused via Dave Chase's
- * second report, 2026-08-21: "Giving it some welly" was written through
- * the new automatic chain and reported 907.8m new on South Downs Way; his
- * other 506 activities near that trail already covered the exact same
- * stretch, so the true new-ground contribution was 0m.
+ * used by trail-descriptions.ts's getActivityTrailMatches for every
+ * real-time and deferred description write alike (see the history below for
+ * why real-time no longer takes a shortcut here).
  *
- * Computes coverage from every OTHER activity NEAR THIS ONE (not near the
- * trail as a whole) and subtracts it from this activity's own trail
- * overlap directly. Root cause this replaces (2026-08-22): the previous
- * version unioned every other activity within range of the ENTIRE trail —
- * correct, but on a long trail (South West Coast Path, 1,014 km) a
- * busy account's full activity history near that trail (Sophie Davis: 22)
- * all had to be re-unioned for every single description write, however far
- * from THIS activity they actually were. That union routinely exceeded
- * both the 20s statement_timeout below and, cascading from there, the
- * Vercel request's own 60s ceiling — confirmed in production logs timing
- * out inside this function for Sophie's "Morning Run".
+ * That fallback used to just report the activity's whole raw overlap with
+ * the trail as "new ground" — correct only the first time a route is ever
+ * run, wrong every time after. Root-caused via Dave Chase's second report,
+ * 2026-08-21: "Giving it some welly" was written through the new automatic
+ * chain and reported 907.8m new on South Downs Way; his other 506 activities
+ * near that trail already covered the exact same stretch, so the true
+ * new-ground contribution was 0m.
  *
- * Restricting "other activities" to LOCAL_VICINITY_METRES of THIS activity
- * (rather than of the trail) is mathematically equivalent, not an
- * approximation: this activity's own 50 m buffer can't extend past that
- * radius, so any activity further away literally cannot share coverage
- * with it regardless of how large or small the account's total activity
- * count is. The candidate set this filters against scales with how many
- * OTHER activities happen to run right past this one spot — not with the
- * trail's length or the account's total history — so this stays fast
- * whether an account has 20 activities or 20,000.
+ * Computes coverage from every OTHER activity relevant to THIS activity's
+ * specific trail overlap (not near the trail as a whole, and — see below —
+ * not just near this activity's whole raw path either) and subtracts it from
+ * this activity's own trail overlap directly. Root cause this replaces
+ * (2026-08-22): the previous version unioned every other activity within
+ * range of the ENTIRE trail — correct, but on a long trail (South West Coast
+ * Path, 1,014 km) a busy account's full activity history near that trail
+ * (Sophie Davis: 22) all had to be re-unioned for every single description
+ * write, however far from THIS activity they actually were. That union
+ * routinely exceeded both the 20s statement_timeout below and, cascading
+ * from there, the Vercel request's own 60s ceiling — confirmed in production
+ * logs timing out inside this function for Sophie's "Morning Run".
  *
- * NEARBY_OTHERS_LIMIT caps that candidate set further, for the case the
- * radius restriction alone doesn't cover: a user who repeats the exact
- * same popular route often enough that hundreds of their OWN activities
- * cluster within LOCAL_VICINITY_METRES of any one of them. Root-caused
- * 2026-08-26: Paul Crowe's "Happy Heartiversary to me" sits at a spot with
- * 792 of his own other activities within 150 m — ST_Union over that many
- * buffered geometries took 56s+ for one candidate trail alone, blowing
- * past this function's own 20s statement_timeout badly enough (Postgres's
- * cancel handshake itself isn't instant) to still exceed the whole
- * request's 60s ceiling before the write ever got a chance to checkpoint,
- * so every future drain hop re-picked the same doomed activity and never
- * made progress on anyone's backlog. If even a handful of a user's own
- * nearby-duplicate activities already cover a stretch, that's sufficient
- * signal — the 793rd near-identical loop isn't adding new information,
- * just cost. Ordering by recency (not distance — an extra ST_Distance sort
- * over hundreds of rows would reintroduce the same cost this is avoiding)
- * before capping is an arbitrary but reasonable tie-break: any bounded
- * subset of a large duplicate cluster is about as informative as any
- * other.
+ * "Relevant to this activity's trail overlap" means: does the OTHER
+ * activity's own buffer actually touch the specific stretch of trail THIS
+ * activity covers (`this_coverage`) — not "is the other activity anywhere
+ * near this activity's whole raw GPS path." Changed from the latter
+ * (2026-09-13): a long, roundabout activity's raw path can pass within
+ * range of hundreds of a user's OTHER activities that have nothing to do
+ * with the trail stretch in question — e.g. everything near their front
+ * door — which, combined with NEARBY_OTHERS_LIMIT below, could crowd the
+ * genuinely relevant (often much older) activities that actually cover this
+ * trail stretch out of the capped candidate list entirely. Root-caused via
+ * Sophie Davis, 2026-09-13: her "First Friday…" walk was reported as adding
+ * 1.3 km of new ground on Tandridge Border Path and 1.4 km on Greenwich
+ * Meridian Trail; a full, activity-count-unconstrained recompute of each
+ * trail with that walk excluded produced an IDENTICAL total to including it
+ * — proving the true new-ground contribution was 0m on both. Scoping the
+ * "other activities" candidate set to this activity's actual trail overlap
+ * geometry, rather than its whole raw path, fixed both: her Cook's Pond loop
+ * stretch of Tandridge is touched by 62 of her activities going back to
+ * 2016, and her Greenwich Meridian Trail stretch (she lives right on it) by
+ * 1,605 — recency-capped lists scoped to the WHOLE walk's path were pulling
+ * in unrelated nearby activities and pushing the relevant ones off the end.
  *
- * Wrapped in the same statement_timeout safety net as before — a timeout
- * or any other failure here returns 0 (safe: undercounts a genuinely-new
+ * NEARBY_OTHERS_LIMIT caps that candidate set for the case an even-narrower
+ * scoping to this activity's overlap alone doesn't fully bound: a stretch of
+ * trail so popular that even ITS OWN touching-activity count runs into the
+ * thousands (Greenwich Meridian Trail above: 1,605). Verified empirically
+ * against that exact case rather than assumed: 400 was the smallest limit
+ * that converged to the correct 0m; 500 is used here for margin. Ordering by
+ * recency (not distance — an extra ST_Distance sort over hundreds of rows
+ * would reintroduce the same cost this is avoiding) before capping is an
+ * arbitrary but reasonable tie-break.
+ *
+ * Wrapped in the same statement_timeout safety net as before — a timeout or
+ * any other failure here returns 0 (safe: undercounts a genuinely-new
  * stretch rather than repeating the original bug of overcounting old
  * ground) instead of throwing and losing the whole description write.
  */
-const NEARBY_OTHERS_LIMIT = 30;
+const NEARBY_OTHERS_LIMIT = 500;
 export async function computeNewGroundExcludingActivity(
   userId: string,
   activityId: string,
@@ -214,17 +194,20 @@ export async function computeNewGroundExcludingActivity(
          FROM this_activity a
          CROSS JOIN (SELECT geometry FROM trails WHERE id = $2) t
        ),
-       -- Only activities close enough to THIS one to possibly share
-       -- coverage with it — not every activity near the trail. Capped at
-       -- NEARBY_OTHERS_LIMIT (see doc comment above) so a spot this user
-       -- revisits constantly doesn't union hundreds of near-duplicates.
+       -- Other activities whose OWN buffer actually touches the specific
+       -- trail stretch this activity covers — not every activity near the
+       -- trail as a whole, and not just activities near this activity's
+       -- whole raw path (see doc comment above for why that distinction
+       -- matters). Capped at NEARBY_OTHERS_LIMIT for the rare stretch
+       -- popular enough on its own to need it.
        nearby_others_capped AS (
          SELECT o.geometry
-         FROM activities o, this_activity a
+         FROM activities o, this_coverage tc
          WHERE o.user_id = $1
            AND o.id != $3
            AND o.geometry IS NOT NULL
-           AND ST_DWithin(o.geometry::geography, a.geometry::geography, ${LOCAL_VICINITY_METRES})
+           AND o.geometry && ST_Expand(tc.geom, ${NEARBY_OTHER_BBOX_MARGIN_DEGREES})
+           AND ST_Intersects(ST_Buffer(o.geometry::geography, ${BUFFER_METRES})::geometry, tc.geom)
          ORDER BY o.start_date DESC
          LIMIT ${NEARBY_OTHERS_LIMIT}
        ),

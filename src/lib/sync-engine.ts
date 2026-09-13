@@ -5,7 +5,7 @@ import {
   selectPolyline,
   ALL_TRACKED_ACTIVITY_TYPES,
 } from "@/lib/strava";
-import { computeTrailProgress, snapshotTrailProgress } from "@/lib/match-trails";
+import { computeTrailProgress } from "@/lib/match-trails";
 import {
   getActivityTrailMatches,
   writeTrailDescription,
@@ -313,19 +313,6 @@ export async function finishSync(
   );
   const wantsDescriptionUpdate = userPrefs?.strava_description_updates ?? false;
 
-  // Delta of user_trail_progress.completed_distance across this batch's
-  // computeTrailProgress call, per trail — see snapshotTrailProgress's
-  // comment for why this reuses that computation instead of a separate
-  // (and, confirmed in production, far too expensive) geometric recompute.
-  // One map shared across every activity in this batch: if two brand-new
-  // activities in the same sync chunk both touch the same trail, this
-  // can't tell which one contributed which share of the combined delta,
-  // so both end up reporting the batch's whole new-ground total for that
-  // trail rather than a precise per-activity split. Rare in practice (most
-  // syncs/webhook events involve one activity at a time) and not worth the
-  // complexity of per-activity re-matching to fix.
-  let newGroundByTrailId = new Map<string, number>();
-
   try {
     // National Trails first within the cap below — they're the ~20 trails
     // (of 1,181) users actually look for immediately, so a brand-new
@@ -383,17 +370,8 @@ export async function finishSync(
       });
     }
 
-    const beforeSnapshot = wantsDescriptionUpdate
-      ? await snapshotTrailProgress(userId, trailIds)
-      : new Map<string, number>();
     if (trailIds.length > 0) {
       matchedTrails = await computeTrailProgress(userId, trailIds);
-    }
-    if (wantsDescriptionUpdate) {
-      const afterSnapshot = await snapshotTrailProgress(userId, trailIds);
-      newGroundByTrailId = new Map(
-        trailIds.map((id) => [id, Math.max(0, (afterSnapshot.get(id) ?? 0) - (beforeSnapshot.get(id) ?? 0))])
-      );
     }
     logSyncEvent(userId, "matching_complete", { matchedTrails });
 
@@ -428,7 +406,7 @@ export async function finishSync(
     );
     for (const act of toUpdate) {
       try {
-        const matches = await getActivityTrailMatches(userId, act.id, newGroundByTrailId);
+        const matches = await getActivityTrailMatches(userId, act.id);
 
         // matches.length === 0 is ambiguous — getActivityTrailMatches only
         // returns a trail once user_trail_progress has a real row for it,

@@ -7,7 +7,7 @@ import {
   selectPolyline,
   ALL_TRACKED_ACTIVITY_TYPES,
 } from "@/lib/strava";
-import { computeTrailProgress, snapshotTrailProgress } from "@/lib/match-trails";
+import { computeTrailProgress } from "@/lib/match-trails";
 import {
   getActivityTrailMatches,
   writeTrailDescription,
@@ -385,18 +385,7 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number) {
       });
     }
 
-    // Snapshot completed_distance before/after matching so writeTrailDescription
-    // can report exactly how much new ground THIS activity added — see the
-    // comment on snapshotTrailProgress. Only meaningful for the nearby-trails
-    // fast path (trailIds non-empty); the rare full-account fallback below
-    // isn't scoped to specific trails, so there's nothing to diff for it and
-    // getActivityTrailMatches just falls back to its own cheap approximation.
-    // Skipped entirely when the user doesn't have description writes on —
-    // no point taking two extra snapshots nothing will ever read.
     const wantsDescriptionUpdate = userPrefs?.strava_description_updates ?? false;
-    const beforeSnapshot = wantsDescriptionUpdate
-      ? await snapshotTrailProgress(user.id, trailIds)
-      : new Map<string, number>();
 
     console.log(
       `[webhook/strava] Saved activity ${activityId}, matching ${trailIds.length} nearby trail(s)…`
@@ -417,22 +406,17 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number) {
 
     // Optionally append trail info to the Strava activity description.
     // Skipped entirely (not attempted with a guessed value) when matching
-    // timed out: the "after" snapshot below would be taken before the
-    // still-running background matching has actually landed its DB
-    // updates, making every trail's new-ground delta compute as a false
-    // zero — confirmed in production, this is exactly what silently
-    // blocked Glen's and David's 'new_with_totals' writes despite both
-    // activities genuinely covering several km of new ground. Since
-    // activity_trail_matches is now registered unconditionally above,
-    // update-descriptions' backlog scan will find and correctly write
-    // this once matching actually finishes, instead of the write being
-    // lost here with a wrong answer.
+    // timed out: getActivityTrailMatches only returns a trail once
+    // user_trail_progress has a real row for it, and still-running
+    // background matching hasn't landed those rows yet — confirmed in
+    // production, this is exactly what silently blocked Glen's and David's
+    // 'new_with_totals' writes despite both activities genuinely covering
+    // several km of new ground. Since activity_trail_matches is now
+    // registered unconditionally above, update-descriptions' backlog scan
+    // will find and correctly write this once matching actually finishes,
+    // instead of the write being lost here with a wrong answer.
     if (wantsDescriptionUpdate && matchResult !== "timed_out") {
-      const afterSnapshot = await snapshotTrailProgress(user.id, trailIds);
-      const newGroundByTrailId = new Map(
-        trailIds.map((id) => [id, Math.max(0, (afterSnapshot.get(id) ?? 0) - (beforeSnapshot.get(id) ?? 0))])
-      );
-      const matches = await getActivityTrailMatches(user.id, savedAct.id, newGroundByTrailId);
+      const matches = await getActivityTrailMatches(user.id, savedAct.id);
       if (matches.length > 0) {
         console.log(
           `[webhook/strava] Updating description for activity ${activityId}…`
