@@ -79,6 +79,11 @@ export default function TrailMap({
       leafletRef.current = L;
 
       const map = L.map(containerRef.current, { zoomControl: true });
+      // Leaflet's own "Leaflet" branding link in the attribution control is a
+      // default, not a license requirement (BSD-2-Clause has no on-map
+      // attribution clause) — only the tile/data source credit in
+      // TILE_ATTRIBUTION (MapTiler, OpenStreetMap) is actually required.
+      map.attributionControl.setPrefix(false);
       mapRef.current = map;
 
       L.tileLayer(TILE_URL, { attribution: TILE_ATTRIBUTION, maxZoom: 18 }).addTo(map);
