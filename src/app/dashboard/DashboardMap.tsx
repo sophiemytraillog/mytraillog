@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { TILE_URL, TILE_ATTRIBUTION } from "@/lib/map-tiles";
 
 type Coord = [number, number];
 
@@ -60,10 +61,7 @@ export default function DashboardMap({ trails, selectedSlug, onTrailClick }: Pro
       const map = L.map(containerRef.current, { zoomControl: true, zoomAnimation: false, minZoom: 5 });
       mapRef.current = map;
 
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-        maxZoom: 18,
-      }).addTo(map);
+      L.tileLayer(TILE_URL, { attribution: TILE_ATTRIBUTION, maxZoom: 18 }).addTo(map);
 
       // Fit to Great Britain — invalidateSize first so Leaflet knows the container dimensions
       map.invalidateSize();
