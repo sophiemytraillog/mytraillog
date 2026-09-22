@@ -10,10 +10,43 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// Matches runSyncChunk's own DEFAULT_BUDGET_MS (sync-engine.ts) — 15s margin
-// under Vercel's 60s maxDuration for the final DB write and dispatch to the
-// next hop.
-const CHAIN_TIME_BUDGET_MS = 45_000;
+// Deliberately smaller than runSyncChunk's own DEFAULT_BUDGET_MS (45s) —
+// this hop still has finishSync's inline trail matching to do afterward
+// (up to MAX_TRAILS_PER_FINISH_SYNC nearby trails, sync-engine.ts), which
+// has no budget of its own. Root-caused in production, 2026-09-22, testing
+// Luke Davis's reconnect: a hop combining a 45s chunk fetch with finishSync
+// (84 nearby trails that hop) hit Vercel's actual runtime ceiling —
+// "Task timed out after 60 seconds" in the function logs — which kills the
+// ENTIRE waitUntil()'d invocation, including whatever hadn't run yet. Since
+// dispatching the next hop happens AFTER finishSync, that kill silently
+// broke the chain with no next hop ever dispatched — confirmed by a 39-
+// minute gap in sync_log before the external-scheduler backstop (the whole
+// reason that exists — see MAX_CHAIN_HOPS below) eventually noticed and
+// resumed it. 25s (sync) + FINISH_SYNC_RACE_BUDGET_MS's 10s (matching,
+// hard-capped below) + dispatch's own worst case (~10.5s, two 5s attempts
+// plus a retry delay) leaves real margin under 60s instead of relying on
+// three unbounded/soft budgets happening to add up short by luck.
+const CHAIN_TIME_BUDGET_MS = 25_000;
+
+// See CHAIN_TIME_BUDGET_MS's comment. finishSync's inline computeTrailProgress
+// calls have no time budget of their own (each trail gets its own 3-minute
+// statement_timeout — see match-trails.ts) and can legitimately run long, the
+// same gap that made runExternalMatchDrainBatch need this exact same
+// Promise.race hardening (2026-09-08 — see that function's comment for the
+// production 504/orphaned-query incident it fixes). Racing doesn't cancel
+// finishSync — the underlying computeTrailProgress calls keep running
+// server-side and still land in the DB — it just stops THIS hop waiting on
+// them, so a slow trail can't take the whole chain down with it. Any trail
+// finishSync doesn't get to in time isn't lost: the external match-drain
+// backstop (match-chain.ts) picks up whatever's still unmatched.
+const FINISH_SYNC_RACE_BUDGET_MS = 10_000;
+
+function withDeadline<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
 
 // Root cause this exists to fix (2026-09-22): syncing a large activity
 // history required the BROWSER to stay open and keep reopening an
@@ -102,6 +135,16 @@ async function dispatchNextHop(path: string, body: Record<string, unknown>): Pro
  * covers the trails nearby THIS hop's activities inline, and firing the
  * wider match/description chains once per hop as well would just be
  * redundant overlapping work for no benefit.
+ *
+ * On "partial", the next hop is dispatched BEFORE finishSync runs, not
+ * after — deliberately. finishSync is the slow, unbounded part of a hop
+ * (see FINISH_SYNC_RACE_BUDGET_MS); if it or anything after it still
+ * somehow overran Vercel's own runtime ceiling despite the budgets here,
+ * dispatching first means the CHAIN keeps moving regardless — a lost hop's
+ * own matching is recoverable later (the external match-drain backstop
+ * gets there eventually), but a lost dispatch previously meant the whole
+ * chain silently stopped with nothing to notice for up to
+ * EXTERNAL_SYNC_RESUME_STALE_SECONDS.
  */
 export async function runSyncChunkAndChain(userId: string, hop = 0): Promise<void> {
   if (hop >= MAX_CHAIN_HOPS) {
@@ -124,10 +167,24 @@ export async function runSyncChunkAndChain(userId: string, hop = 0): Promise<voi
     return;
   }
 
+  if (result.status === "partial") {
+    // Dispatch first — see the doc comment above for why this ordering
+    // matters. Awaited only until the next hop acknowledges receipt, same
+    // as match-chain.ts's equivalent.
+    const dispatched = await dispatchNextHop("/api/internal/continue-sync", { userId, hop: hop + 1 });
+    if (!dispatched) {
+      console.error(`[sync-chain] Failed to dispatch next hop for user ${userId} — runExternalSyncResumeBatch will pick this up instead`);
+    }
+  }
+
   if (result.newDbIds.length > 0) {
-    await finishSync(userId, result.newDbIds).catch((err) => {
-      console.error(`[sync-chain] finishSync failed for user ${userId} at hop ${hop}:`, err);
-    });
+    await withDeadline(
+      finishSync(userId, result.newDbIds).catch((err) => {
+        console.error(`[sync-chain] finishSync failed for user ${userId} at hop ${hop}:`, err);
+      }),
+      FINISH_SYNC_RACE_BUDGET_MS,
+      undefined
+    );
   }
 
   if (result.status === "complete") {
@@ -141,13 +198,6 @@ export async function runSyncChunkAndChain(userId: string, hop = 0): Promise<voi
     ]).catch((err) => {
       console.error(`[sync-chain] Post-complete match/description trigger failed for user ${userId}:`, err);
     });
-    return;
-  }
-
-  // status === "partial" — more to fetch, dispatch the next hop.
-  const dispatched = await dispatchNextHop("/api/internal/continue-sync", { userId, hop: hop + 1 });
-  if (!dispatched) {
-    console.error(`[sync-chain] Failed to dispatch next hop for user ${userId} — runExternalSyncResumeBatch will pick this up instead`);
   }
 }
 
@@ -260,9 +310,19 @@ export async function runExternalSyncResumeBatch(
   }
 
   if (result.newDbIds.length > 0) {
-    await finishSync(candidate.id, result.newDbIds).catch((err) => {
-      console.error(`[external-sync-resume] finishSync failed for ${candidate.first_name ?? candidate.id}:`, err);
-    });
+    // Same hard-race reasoning as runSyncChunkAndChain's own finishSync
+    // call — see FINISH_SYNC_RACE_BUDGET_MS's comment. Doubly important
+    // here: this function's caller (drain-batch/route.ts) has its own
+    // shared request-wide budget across three phases, and an unbounded
+    // finishSync here could blow that budget the same way it broke the
+    // reactive chain.
+    await withDeadline(
+      finishSync(candidate.id, result.newDbIds).catch((err) => {
+        console.error(`[external-sync-resume] finishSync failed for ${candidate.first_name ?? candidate.id}:`, err);
+      }),
+      FINISH_SYNC_RACE_BUDGET_MS,
+      undefined
+    );
   }
 
   if (result.status === "complete") {
