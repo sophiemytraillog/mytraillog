@@ -6,6 +6,7 @@ import { pool } from "@/lib/db";
 import { logSyncEvent } from "@/lib/sync-log";
 import { triggerMatchChain } from "@/lib/match-chain";
 import { triggerDescriptionChain } from "@/lib/description-chain";
+import { triggerSyncChain } from "@/lib/sync-chain";
 
 export const dynamic = "force-dynamic";
 // Vercel Hobby plan hard-caps function duration at 60s — this cannot be
@@ -75,6 +76,14 @@ export async function GET(request: NextRequest) {
           await finishSync(userId, result.newDbIds).catch((err) => {
             console.error("[sync/activities] finishSync on partial chunk failed:", err);
           });
+
+          // Continue fetching subsequent chunks server-side from here —
+          // closing this tab (or the browser SSE connection dropping for
+          // any other reason) no longer stops the sync. See sync-chain.ts
+          // for why this needs the external-scheduler backstop
+          // (runExternalSyncResumeBatch, wired into drain-batch/route.ts)
+          // alongside it, not just this self-dispatch chain alone.
+          waitUntil(triggerSyncChain(userId));
           return;
         }
 

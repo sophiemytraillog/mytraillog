@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-type SyncState = "idle" | "syncing" | "done" | "error";
+type SyncState = "idle" | "syncing" | "background" | "done" | "error";
 
 interface SyncData {
   fetched: number;
@@ -41,11 +41,6 @@ export default function SyncButton({
   // held here so it can be restored once "matched" arrives, replacing the
   // interim "Updating trail progress…" text.
   const doneMessageRef = useRef("");
-  // Large histories take many 45s chunks to sync. Cap the auto-continue loop
-  // so a pathological case (e.g. every chunk instantly reporting "partial")
-  // can't spin forever — a real sync needs nowhere near this many chunks.
-  const chunkCountRef = useRef(0);
-  const MAX_CHUNKS = 200;
 
   const runChunk = () => {
     const es = new EventSource("/api/sync/activities");
@@ -64,16 +59,17 @@ export default function SyncButton({
     es.addEventListener("partial", (e: MessageEvent) => {
       const d: SyncData = JSON.parse(e.data);
       baseRef.current = { fetched: baseRef.current.fetched + d.fetched, saved: baseRef.current.saved + d.saved };
-      setData({ ...baseRef.current, message: d.message });
       es.close();
 
-      chunkCountRef.current += 1;
-      if (chunkCountRef.current >= MAX_CHUNKS) {
-        setSyncState("error");
-        setData((prev) => ({ ...prev, message: "Sync is taking longer than expected - please retry." }));
-        return;
-      }
-      runChunk();
+      // The server takes over from here (see sync/activities/route.ts's
+      // "partial" branch — it dispatches sync-chain.ts's background chain
+      // right after this event is sent), so the client no longer reopens
+      // an EventSource itself for the next chunk. Large histories used to
+      // require the tab to stay open and keep reconnecting chunk after
+      // chunk; now one click is enough — the rest continues server-side
+      // whether or not this page is still open.
+      setSyncState("background");
+      setData({ ...baseRef.current, message: "Syncing in the background — check back shortly" });
     });
 
     es.addEventListener("done", (e: MessageEvent) => {
@@ -121,11 +117,10 @@ export default function SyncButton({
   };
 
   const startSync = () => {
-    if (syncState === "syncing" || !hasBasicAccess) return;
+    if (syncState === "syncing" || syncState === "background" || !hasBasicAccess) return;
     esRef.current?.close();
 
     baseRef.current = { fetched: 0, saved: 0 };
-    chunkCountRef.current = 0;
     setSyncState("syncing");
     setData({ fetched: 0, saved: 0, message: "Connecting…" });
 
@@ -148,7 +143,7 @@ export default function SyncButton({
   return (
     <div className="mt-6 w-full">
       {/* Activity count */}
-      {activityCount > 0 && syncState !== "syncing" && (
+      {activityCount > 0 && syncState !== "syncing" && syncState !== "background" && (
         <p className="text-[#8A7F72] text-sm text-center mb-4">
           {activityCount} activit{activityCount === 1 ? "y" : "ies"} synced
         </p>
@@ -206,6 +201,34 @@ export default function SyncButton({
         </div>
       )}
 
+      {/* Background sync — the reactive chain (or, failing that, the
+          external-scheduler backstop — see sync-chain.ts) continues
+          fetching remaining chunks server-side from here. No live
+          progress to show since nothing's actively connected anymore;
+          "Refresh" just re-renders the dashboard from current DB state,
+          it doesn't drive the sync itself. */}
+      {syncState === "background" && (
+        <div className="mb-4">
+          <div className="flex items-center justify-center gap-2 text-[#4A7C59] text-sm mb-3">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+              <path fillRule="evenodd" d="M4.755 10.059a7.5 7.5 0 0112.548-3.364l1.903 1.903h-3.183a.75.75 0 100 1.5h4.992a.75.75 0 00.75-.75V4.356a.75.75 0 00-1.5 0v3.18l-1.9-1.9A9 9 0 003.306 9.67a.75.75 0 101.45.388zm15.408 3.352a.75.75 0 00-.919.53 7.5 7.5 0 01-12.548 3.364l-1.902-1.903h3.183a.75.75 0 000-1.5H2.984a.75.75 0 00-.75.75v4.992a.75.75 0 001.5 0v-3.18l1.9 1.9a9 9 0 0015.059-4.035.75.75 0 00-.53-.918z" clipRule="evenodd" />
+            </svg>
+            <span>{data.message}</span>
+          </div>
+          {data.saved > 0 && (
+            <p className="text-[#8A7F72] text-xs text-center mb-3">
+              {data.saved} activit{data.saved === 1 ? "y" : "ies"} saved so far
+            </p>
+          )}
+          <button
+            onClick={() => router.refresh()}
+            className="w-full text-xs text-[#8A7F72] hover:text-[#2C2520] underline underline-offset-2 transition-colors"
+          >
+            Refresh
+          </button>
+        </div>
+      )}
+
       {/* Done message */}
       {syncState === "done" && (
         <div className="flex items-center justify-center gap-1.5 text-[#4A7C59] text-sm mb-4">
@@ -222,7 +245,7 @@ export default function SyncButton({
       )}
 
       {/* Button */}
-      {syncState !== "syncing" && !hasBasicAccess && (
+      {syncState !== "syncing" && syncState !== "background" && !hasBasicAccess && (
         <button
           disabled
           title="Your trial has ended - subscribe to resume syncing"
@@ -231,7 +254,7 @@ export default function SyncButton({
           Subscribe to keep tracking
         </button>
       )}
-      {syncState !== "syncing" && hasBasicAccess && (
+      {syncState !== "syncing" && syncState !== "background" && hasBasicAccess && (
         <button
           onClick={startSync}
           className="w-full flex items-center justify-center gap-2 bg-white hover:bg-[#FAF8F5] border border-[#E5DED4] hover:border-[#C4652A]/40 text-[#2C2520] text-sm font-medium py-2.5 px-4 rounded-xl transition-all duration-150"

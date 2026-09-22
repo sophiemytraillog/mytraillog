@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runExternalDrainBatch } from "@/lib/description-chain";
 import { runExternalMatchDrainBatch } from "@/lib/match-chain";
+import { runExternalSyncResumeBatch } from "@/lib/sync-chain";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -30,6 +31,19 @@ export const maxDuration = 60;
 // means matching now advances on the exact same ~2-minute external cadence
 // as descriptions, with no separate scheduler to set up.
 //
+// Sync resume added to this same call, 2026-09-22, same reasoning again:
+// the reactive sync chain (sync-chain.ts's runSyncChunkAndChain) only fires
+// off the browser's first sync click, and is itself capped at a handful of
+// hops precisely BECAUSE self-dispatch chains hit Vercel's own
+// loop-detection wall (see that file's MAX_CHAIN_HOPS comment) — a large
+// sync, or a chain that dies for any reason (dispatch failure, a deploy
+// restarting mid-chain), previously just sat at sync_status='syncing'
+// until either the daily cron (resume-stuck-syncs, Hobby-plan-limited to
+// once a day) or the next dashboard visit's 60s self-heal nudge happened to
+// notice. This closes that gap the same way matching's did: one bounded
+// runSyncChunk call for whichever sync has gone stalest, on the same
+// external cadence already proven for the other two.
+//
 // TOTAL_REQUEST_BUDGET_MS added 2026-09-08, the day after the above
 // shipped: two real production calls came back as Vercel's own raw
 // FUNCTION_INVOCATION_TIMEOUT (504) at the full 60s maxDuration, each
@@ -49,8 +63,14 @@ export const maxDuration = 60;
 // an attempt with too little time to matter; it'll get picked up on the
 // next call a couple of minutes later, same as any other candidate that
 // doesn't get to run this round.
+// Unchanged total (2026-09-22) — the sync-resume phase below is carved out
+// of this SAME envelope, not added on top of it. Extending the overall
+// ceiling instead of subdividing it further is exactly how the
+// FUNCTION_INVOCATION_TIMEOUT regression above happened in the first place;
+// a third phase gets a third slice of the same budget, not a bigger pie.
 const TOTAL_REQUEST_BUDGET_MS = 45_000;
 const MIN_USEFUL_MATCH_BUDGET_MS = 3_000;
+const MIN_USEFUL_SYNC_RESUME_BUDGET_MS = 3_000;
 
 export async function GET(request: NextRequest) {
   const cronSecret = process.env.CRON_SECRET;
@@ -66,14 +86,26 @@ export async function GET(request: NextRequest) {
   const startedAt = Date.now();
   const descriptions = await runExternalDrainBatch();
 
-  const remainingMs = TOTAL_REQUEST_BUDGET_MS - (Date.now() - startedAt);
-  if (remainingMs < MIN_USEFUL_MATCH_BUDGET_MS) {
+  const remainingAfterDescriptions = TOTAL_REQUEST_BUDGET_MS - (Date.now() - startedAt);
+  if (remainingAfterDescriptions < MIN_USEFUL_MATCH_BUDGET_MS) {
     return NextResponse.json({
       descriptions,
       matching: { skipped: true, reason: "insufficient time remaining after description phase" },
+      syncResume: { skipped: true, reason: "insufficient time remaining after description phase" },
     });
   }
 
-  const matching = await runExternalMatchDrainBatch(remainingMs);
-  return NextResponse.json({ descriptions, matching });
+  const matching = await runExternalMatchDrainBatch(remainingAfterDescriptions);
+
+  const remainingAfterMatching = TOTAL_REQUEST_BUDGET_MS - (Date.now() - startedAt);
+  if (remainingAfterMatching < MIN_USEFUL_SYNC_RESUME_BUDGET_MS) {
+    return NextResponse.json({
+      descriptions,
+      matching,
+      syncResume: { skipped: true, reason: "insufficient time remaining after matching phase" },
+    });
+  }
+
+  const syncResume = await runExternalSyncResumeBatch(remainingAfterMatching);
+  return NextResponse.json({ descriptions, matching, syncResume });
 }
