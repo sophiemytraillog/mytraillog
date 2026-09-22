@@ -70,7 +70,10 @@ export default function TrailMatchProgress({
 
   return (
     <div className="mt-3 text-center">
-      <p className="text-[#8A7F72] text-xs">
+      <p
+        className="text-[#8A7F72] text-xs"
+        title="Includes named sub-sections of longer trails (e.g. individual stages of a multi-part route), which are tracked separately here but shown nested under their parent trail in your list below — so this total is higher than the number of trails you see listed."
+      >
         Matching trails: {checked.toLocaleString()} of {total.toLocaleString()} checked
       </p>
       <div className="h-1 bg-[#EAE4DA] rounded-full overflow-hidden mt-1.5 max-w-[220px] mx-auto">
