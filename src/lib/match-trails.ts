@@ -8,19 +8,62 @@ const BUFFER_METRES = 50;
 // the simplified geometry cutting across headlands or tight coastal bends.
 const SIMPLIFY_MARGIN = 200;
 
+// Same bbox-pre-filter trick as everywhere else in this codebase (see
+// sync-engine.ts's NEARBY_TRAILS_BBOX_DEGREES, trail-descriptions.ts's
+// CANDIDATE_BBOX_MARGIN_DEGREES, match-trails.ts's own
+// NEARBY_OTHER_BBOX_MARGIN_DEGREES/STALE_CHECK_BBOX_DEGREES below) — plain
+// geometry `&&` uses the GIST index on activities.geometry; ST_DWithin
+// against a ::geography cast does not (confirmed via EXPLAIN elsewhere in
+// this file: it evaluates as a brute-force Join Filter, never an Index
+// Cond). 0.003° is this codebase's established conservative approximation
+// of ~250-330m (1° latitude ≈ 111km, shrinking further at higher
+// longitude-latitudes — over-generous at UK latitudes, never under).
+//
+// Root cause this exists to fix (2026-09-22): computeTrailProgress had no
+// such pre-filter — combined_buffer joined EVERY one of a user's activities
+// against the trail via ST_DWithin(...::geography...) with nothing to
+// narrow the candidate set first, so accounts with unusually large activity
+// counts paid the full ST_DWithin cost per activity per trail regardless of
+// how close that activity actually was. Confirmed via Luke Davis's account
+// (6,747 activities, still growing via the background sync chain):
+// single-trail computeTrailProgress calls were taking 45-60+ seconds each,
+// consuming a chain hop's entire time budget and leaving trail_match_checks
+// essentially stuck (2 of 1,181 trails checked after a full hop). Adding
+// this same bbox `&&` pre-filter before the ST_DWithin check — narrowing
+// "every activity this user has ever recorded" down to "activities whose
+// bounding box is actually near this trail's bounding box" before the
+// expensive geography distance calc runs — is the identical fix already
+// proven for the same shape of problem in finishSync's registration query,
+// getActivityTrailMatches, and computeNewGroundExcludingActivity's
+// nearby-others lookup.
+const MATCH_BBOX_MARGIN_DEGREES = 0.003;
+
 const MATCH_SQL = `
   WITH
   -- Union all activity buffers into one polygon so overlapping runs don't double-count.
-  -- Uses simplified trail for the spatial filter only (performance) — NOT for geometry output.
+  -- Uses trails.simplified_geometry for the spatial filter only (performance)
+  -- — NOT for geometry output.
   -- Pre-filter uses BUFFER_METRES + SIMPLIFY_MARGIN to account for simplification distortion;
   -- the actual 50 m buffer (ST_Buffer below) determines what counts as "on the trail".
+  --
+  -- References the materialized, GIST-indexed trails.simplified_geometry
+  -- column (kept in sync by a trigger, same ST_SimplifyPreserveTopology(...,
+  -- 0.001) tolerance) instead of computing ST_SimplifyPreserveTopology(...)
+  -- inline as before (2026-09-22): EXPLAIN ANALYZE on South West Coast Path
+  -- (59,495 points, the largest trail in the catalog) showed the planner
+  -- flattening the old single-row subquery and re-evaluating
+  -- ST_SimplifyPreserveTopology on the FULL unsimplified geometry once per
+  -- candidate activity row, not once overall — 10.8s alone for ~35 matching
+  -- rows out of 972 bbox candidates. A plain column reference can't be
+  -- "recomputed", so this is immune to that flattening regardless of what
+  -- the planner decides to inline.
   combined_buffer AS (
     SELECT
       ST_Union(ST_Buffer(a.geometry::geography, ${BUFFER_METRES})::geometry) AS geom,
       COUNT(DISTINCT a.id)  AS activity_count,
       MIN(a.start_date)     AS first_date,
       MAX(a.start_date)     AS last_date
-    FROM (SELECT ST_SimplifyPreserveTopology(geometry, 0.001) AS geometry
+    FROM (SELECT simplified_geometry AS geometry
           FROM trails WHERE id = $2) t_simplified
     JOIN activities a
       ON  a.user_id = $1
@@ -28,6 +71,10 @@ const MATCH_SQL = `
       -- All activity types are stored regardless of the include_cycling
       -- preference; it's applied here, at match time, instead.
       AND ($3::boolean OR a.activity_type <> ALL($4::text[]))
+      -- Cheap indexed bbox filter FIRST — cuts a large account's full
+      -- activity set down to just what's near this trail before the
+      -- expensive geography distance check below has to look at it.
+      AND a.geometry && ST_Expand(t_simplified.geometry, ${MATCH_BBOX_MARGIN_DEGREES})
       AND ST_DWithin(a.geometry::geography, t_simplified.geometry::geography, ${BUFFER_METRES + SIMPLIFY_MARGIN})
   ),
   -- Intersect the merged buffer with the FULL detailed trail geometry so that
@@ -87,11 +134,19 @@ const ACTIVITY_MATCH_SQL = `
   INSERT INTO activity_trail_matches (activity_id, trail_id, user_id)
   SELECT DISTINCT a.id, $2::uuid, $1::uuid
   FROM activities a
-  CROSS JOIN (SELECT ST_SimplifyPreserveTopology(geometry, 0.001) AS geometry
+  -- Materialized trails.simplified_geometry column, not an inline
+  -- ST_SimplifyPreserveTopology(...) call — same reason as MATCH_SQL above:
+  -- a plain column reference can't be re-evaluated per row no matter how the
+  -- planner inlines this subquery, unlike the function call it replaces.
+  CROSS JOIN (SELECT simplified_geometry AS geometry
               FROM trails WHERE id = $2::uuid) t_simplified
   WHERE a.user_id = $1::uuid
     AND a.geometry IS NOT NULL
     AND ($3::boolean OR a.activity_type <> ALL($4::text[]))
+    -- Same bbox pre-filter as MATCH_SQL above, same reason — this runs
+    -- right after a trail matches, over the same full per-user activity
+    -- set, and was subject to the identical Luke-Davis-scale slowdown.
+    AND a.geometry && ST_Expand(t_simplified.geometry, ${MATCH_BBOX_MARGIN_DEGREES})
     AND ST_DWithin(a.geometry::geography, t_simplified.geometry::geography, ${BUFFER_METRES + SIMPLIFY_MARGIN})
   ON CONFLICT (activity_id, trail_id) DO NOTHING`;
 
