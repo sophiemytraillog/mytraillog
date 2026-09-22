@@ -46,11 +46,18 @@ function sleep(ms: number) {
 // broke the chain with no next hop ever dispatched — confirmed by a 39-
 // minute gap in sync_log before the external-scheduler backstop (the whole
 // reason that exists — see MAX_CHAIN_HOPS below) eventually noticed and
-// resumed it. 25s (sync) + FINISH_SYNC_RACE_BUDGET_MS's 10s (matching,
-// hard-capped below) + dispatch's own worst case (~10.5s, two 5s attempts
-// plus a retry delay) leaves real margin under 60s instead of relying on
-// three unbounded/soft budgets happening to add up short by luck.
-const CHAIN_TIME_BUDGET_MS = 25_000;
+// resumed it.
+//
+// Lowered further, 15s (from 25s), the SAME day: dispatching the next hop
+// now happens BEFORE finishSync (see the doc comment on
+// runSyncChunkAndChain), so finishSync no longer needs to be starved to
+// protect the chain's own continuation — that's already safe regardless of
+// how long finishSync takes. What it DOES still need to fit inside is
+// Vercel's 60s per-invocation ceiling, alongside FINISH_SYNC_RACE_BUDGET_MS
+// below: 15s (sync) + dispatch's own worst case (~10.5s, two 5s attempts
+// plus a retry delay) + FINISH_SYNC_RACE_BUDGET_MS's 30s leaves ~4.5s
+// margin under 60s.
+const CHAIN_TIME_BUDGET_MS = 15_000;
 
 // See CHAIN_TIME_BUDGET_MS's comment. finishSync's inline computeTrailProgress
 // calls have no time budget of their own (each trail gets its own 3-minute
@@ -63,7 +70,26 @@ const CHAIN_TIME_BUDGET_MS = 25_000;
 // them, so a slow trail can't take the whole chain down with it. Any trail
 // finishSync doesn't get to in time isn't lost: the external match-drain
 // backstop (match-chain.ts) picks up whatever's still unmatched.
-const FINISH_SYNC_RACE_BUDGET_MS = 10_000;
+//
+// Raised 10s -> 30s, 2026-09-22, hours after the value above first shipped:
+// testing Luke Davis's account (5 National Trails among his candidates,
+// including South West Coast Path — documented elsewhere in this codebase,
+// see match-trails.ts, as one of the slowest trails to compute) confirmed
+// 10s was never enough to get through even ONE trail in
+// MAX_TRAILS_PER_FINISH_SYNC's up-to-40-trail batch, let alone checkpoint
+// any progress: 13 consecutive matching_triggered events, zero
+// matching_complete, zero matching_error — every single hop's
+// computeTrailProgress call was being abandoned mid-loop before it could
+// write even one trail_match_checks row. National Trails are deliberately
+// processed FIRST (see the nearbyTrails query in sync-engine.ts) precisely
+// because they're what users look for immediately — but that ordering only
+// helps if there's enough time to actually reach one, and 10s wasn't, for
+// an account whose first candidates happen to include the coastal 1,014km
+// trail. Now that dispatch no longer waits on this function (see
+// CHAIN_TIME_BUDGET_MS's comment), there's no reason to keep it this
+// short — 30s gives real per-hop progress a chance without meaningfully
+// changing the platform-ceiling math above.
+const FINISH_SYNC_RACE_BUDGET_MS = 30_000;
 
 function withDeadline<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
   return Promise.race([
@@ -246,6 +272,13 @@ export function triggerSyncChain(userId: string): Promise<void> {
 // external cadence rather than needing a separate scheduler set up.
 const EXTERNAL_SYNC_RESUME_TIME_BUDGET_MS = 10_000;
 
+// Below this, don't bother starting finishSync at all — same reasoning as
+// drain-batch/route.ts's own MIN_USEFUL_MATCH_BUDGET_MS/
+// MIN_USEFUL_SYNC_RESUME_BUDGET_MS: a call with barely any time left is
+// vanishingly unlikely to make real progress before its race times out
+// anyway, so skip the discovery/connection overhead entirely.
+const MIN_USEFUL_FINISH_SYNC_MS = 3_000;
+
 // Higher than the dashboard's own 60s self-heal threshold (dashboard/page.tsx)
 // — that one fires on a page load a human is actually looking at, so it can
 // afford to be eager; this runs unattended and re-picks the same candidate
@@ -290,6 +323,16 @@ export interface ExternalSyncResumeResult {
 export async function runExternalSyncResumeBatch(
   timeBudgetMs: number = EXTERNAL_SYNC_RESUME_TIME_BUDGET_MS
 ): Promise<ExternalSyncResumeResult> {
+  // Tracked so finishSync below gets whatever's ACTUALLY left of the
+  // caller's own timeBudgetMs, not the reactive chain's fixed
+  // FINISH_SYNC_RACE_BUDGET_MS regardless of how much runSyncChunk already
+  // used. The caller here is drain-batch/route.ts, which has its own
+  // shared TOTAL_REQUEST_BUDGET_MS across three phases — blindly adding a
+  // fixed 30s on top of whatever this phase already spent would risk
+  // reproducing the exact FUNCTION_INVOCATION_TIMEOUT regression that
+  // constant exists to prevent (see FINISH_SYNC_RACE_BUDGET_MS's comment),
+  // just moved to this call site instead of the reactive chain's.
+  const startedAt = Date.now();
   const candidate = await pickNextStaleSyncCandidate();
   if (!candidate) {
     return { candidateId: null, timedOut: false };
@@ -335,18 +378,25 @@ export async function runExternalSyncResumeBatch(
 
   if (result.newDbIds.length > 0) {
     // Same hard-race reasoning as runSyncChunkAndChain's own finishSync
-    // call — see FINISH_SYNC_RACE_BUDGET_MS's comment. Doubly important
-    // here: this function's caller (drain-batch/route.ts) has its own
-    // shared request-wide budget across three phases, and an unbounded
-    // finishSync here could blow that budget the same way it broke the
-    // reactive chain.
-    await withDeadline(
-      finishSync(candidate.id, result.newDbIds, matchBatchPool).catch((err) => {
-        console.error(`[external-sync-resume] finishSync failed for ${candidate.first_name ?? candidate.id}:`, err);
-      }),
-      FINISH_SYNC_RACE_BUDGET_MS,
-      undefined
-    );
+    // call — see FINISH_SYNC_RACE_BUDGET_MS's comment. But NOT that same
+    // fixed budget: this function's caller (drain-batch/route.ts) passed
+    // timeBudgetMs as ITS OWN real ceiling for this whole call, and the
+    // runSyncChunk race above may already have used a good chunk of it —
+    // capping at whatever's actually left (with a small minimum below
+    // which finishSync isn't worth attempting at all) keeps this call's
+    // TOTAL duration bounded to what the caller actually asked for, rather
+    // than tacking a fixed 30s on top regardless of how much of
+    // timeBudgetMs remains.
+    const remainingForFinishSync = timeBudgetMs - (Date.now() - startedAt);
+    if (remainingForFinishSync > MIN_USEFUL_FINISH_SYNC_MS) {
+      await withDeadline(
+        finishSync(candidate.id, result.newDbIds, matchBatchPool).catch((err) => {
+          console.error(`[external-sync-resume] finishSync failed for ${candidate.first_name ?? candidate.id}:`, err);
+        }),
+        remainingForFinishSync,
+        undefined
+      );
+    }
   }
 
   if (result.status === "complete") {
