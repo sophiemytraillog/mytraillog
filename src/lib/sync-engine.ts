@@ -370,12 +370,35 @@ export async function finishSync(
       // (both small sets already), so a precise per-pair proximity check
       // is cheap here even though it isn't at the full-account scale
       // ACTIVITY_MATCH_SQL normally runs at.
+      //
+      // ST_DWithin now checks t.simplified_geometry (not t.geometry), with
+      // the same simplified_geometry && ST_Expand bbox pre-filter used
+      // elsewhere in this file (NEARBY_TRAILS_BBOX_DEGREES, above) and in
+      // trail-descriptions.ts's getActivityTrailMatches
+      // (CANDIDATE_BBOX_MARGIN_DEGREES) — root cause found 2026-09-22
+      // testing Luke Davis's reconnect: even with trailIds already capped
+      // to 40 and newDbIds a small per-chunk batch, ST_DWithin against full
+      // t.geometry::geography still means casting every point of
+      // high-vertex-count trails (South West Coast Path etc.) to geography
+      // per activity×trail pair with no index to accelerate it. Confirmed
+      // via pg_stat_activity: 3 concurrent copies of this exact query
+      // running 18-53+ seconds, consuming finishSync's entire race budget
+      // (FINISH_SYNC_RACE_BUDGET_MS, sync-chain.ts) before
+      // computeTrailProgress — the part that actually writes
+      // trail_match_checks — ever got to run, leaving matching stuck at 0
+      // progress for hours despite sync itself completing thousands of
+      // activities. simplified_geometry is materialized + GIST-indexed and
+      // precise to well within the 50m match threshold; computeTrailProgress
+      // still does the authoritative precise intersection afterward, so
+      // this stays a coarse-but-safe candidate check exactly like the bbox
+      // scan just above it.
       await dbPool.query(
         `INSERT INTO activity_trail_matches (activity_id, trail_id, user_id)
          SELECT a.id, t.id, $1
          FROM activities a
          JOIN trails t ON t.id = ANY($2::uuid[])
-           AND ST_DWithin(a.geometry::geography, t.geometry::geography, 50)
+           AND t.simplified_geometry && ST_Expand(a.geometry, ${NEARBY_TRAILS_BBOX_DEGREES})
+           AND ST_DWithin(a.geometry::geography, t.simplified_geometry::geography, 50)
          WHERE a.id = ANY($3::uuid[]) AND a.geometry IS NOT NULL
          ON CONFLICT (activity_id, trail_id) DO NOTHING`,
         [userId, trailIds, newDbIds]
