@@ -1,10 +1,28 @@
-// Every runSyncChunk/finishSync call in this file passes syncBatchPool
-// explicitly (never the shared `pool`) — confirmed necessary in production,
-// not precautionary: testing Luke Davis's reconnect, the chain died with
-// "timeout exceeded when trying to connect" at hop 3 on every run before
-// this pool existed, consistently. See syncBatchPool's own comment in db.ts
-// for the full root cause.
-import { syncBatchPool } from "@/lib/db";
+// runSyncChunk and finishSync deliberately use TWO DIFFERENT dedicated pools
+// here, not one shared between them:
+//   - syncBatchPool for runSyncChunk — the critical path that actually makes
+//     sync progress. Its own queries are all fast (simple SELECT/INSERT/
+//     UPDATE), so a small dedicated pool suits it well.
+//   - matchBatchPool for finishSync — confirmed necessary in production,
+//     2026-09-22: giving BOTH functions the same dedicated pool (the first
+//     version of this fix) was an improvement but not sufficient. finishSync
+//     calls computeTrailProgress, which can legitimately run for minutes on
+//     an active account (confirmed elsewhere in this codebase: Glen 127s/5
+//     trails, David 283s/7 trails) — and since the chain dispatches the NEXT
+//     hop immediately (see the doc comment on runSyncChunkAndChain), that
+//     next hop's OWN runSyncChunk call needs a connection back from the same
+//     pool within seconds, not minutes. FINISH_SYNC_RACE_BUDGET_MS stops
+//     THIS hop waiting on a slow finishSync, but the abandoned work keeps
+//     running server-side and keeps its connection checked out for as long
+//     as it takes — on a pool shared with runSyncChunk, that starved the
+//     very next hop out, reproducing "timeout exceeded when trying to
+//     connect" even after the dedicated-pool fix, confirmed directly in
+//     Vercel's logs. Routing finishSync's matching work onto matchBatchPool
+//     instead — the pool already dedicated to exactly this kind of work,
+//     and already proven under the external match-drain's own sustained
+//     load — means a lingering finishSync call can never block the sync
+//     chain's own forward progress again, no matter how long it runs.
+import { syncBatchPool, matchBatchPool } from "@/lib/db";
 import { runSyncChunk, finishSync } from "@/lib/sync-engine";
 import { triggerMatchChain } from "@/lib/match-chain";
 import { triggerDescriptionChain } from "@/lib/description-chain";
@@ -185,7 +203,7 @@ export async function runSyncChunkAndChain(userId: string, hop = 0): Promise<voi
 
   if (result.newDbIds.length > 0) {
     await withDeadline(
-      finishSync(userId, result.newDbIds, syncBatchPool).catch((err) => {
+      finishSync(userId, result.newDbIds, matchBatchPool).catch((err) => {
         console.error(`[sync-chain] finishSync failed for user ${userId} at hop ${hop}:`, err);
       }),
       FINISH_SYNC_RACE_BUDGET_MS,
@@ -323,7 +341,7 @@ export async function runExternalSyncResumeBatch(
     // finishSync here could blow that budget the same way it broke the
     // reactive chain.
     await withDeadline(
-      finishSync(candidate.id, result.newDbIds, syncBatchPool).catch((err) => {
+      finishSync(candidate.id, result.newDbIds, matchBatchPool).catch((err) => {
         console.error(`[external-sync-resume] finishSync failed for ${candidate.first_name ?? candidate.id}:`, err);
       }),
       FINISH_SYNC_RACE_BUDGET_MS,
