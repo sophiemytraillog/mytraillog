@@ -79,11 +79,11 @@ if (process.env.NODE_ENV !== "production") {
 // whole function hung waiting for a connection that never freed up. Each
 // drain now has its own single-connection pool, so neither can starve the
 // other no matter how busy either one is.
-function makeBatchPool() {
+function makeBatchPool(prodMax = 1) {
   return new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: { rejectUnauthorized: false },
-    max: process.env.NODE_ENV === "production" ? 1 : 3,
+    max: process.env.NODE_ENV === "production" ? prodMax : 3,
     idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 20_000,
   });
@@ -100,7 +100,22 @@ if (process.env.NODE_ENV !== "production") {
   globalForPg._pgDescriptionBatchPool = descriptionBatchPool;
 }
 
-export const matchBatchPool = globalForPg._pgMatchBatchPool ?? makeBatchPool();
+// max=3 (not the other batch pools' 1), 2026-09-22: since the reactive sync
+// chain started routing finishSync's matching work here too (see
+// syncBatchPool's comment below), this pool can now have several hops'
+// worth of finishSync calls genuinely overlapping at once — confirmed in
+// production testing Luke Davis's account, hops firing every ~16-17s while
+// a single finishSync call can legitimately take up to its own 30s race
+// budget (FINISH_SYNC_RACE_BUDGET_MS, sync-chain.ts). On a single
+// connection, those overlapping calls just queue behind each other and
+// each one's own race times out waiting for a connection that never frees
+// up in time — confirmed directly: 13+ consecutive matching_triggered
+// events with zero matching_complete. Three connections gives enough
+// concurrent headroom for that overlap to actually make progress instead
+// of serializing into a permanent queue, while still being a small,
+// dedicated pool that can't compete with live user-facing traffic on the
+// shared `pool`.
+export const matchBatchPool = globalForPg._pgMatchBatchPool ?? makeBatchPool(3);
 const isNewMatchBatchPool = !globalForPg._pgMatchBatchPool;
 if (isNewMatchBatchPool) {
   matchBatchPool.on("error", (err) => {
