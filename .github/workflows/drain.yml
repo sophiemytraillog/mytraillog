@@ -1,4 +1,4 @@
-name: Drain batch (descriptions + matching)
+name: Drain batch (descriptions + matching + sync resume)
 
 # Replaces cron-job.org (2026-09-08) as the external scheduler that drives
 # /api/internal/drain-batch — see that route and description-chain.ts's
@@ -13,22 +13,32 @@ name: Drain batch (descriptions + matching)
 # returned a normal 200 with real work done), so the stoppage was on
 # cron-job.org's side, not this app's.
 #
+# Widened from an overnight-only window (03:00-06:58 UTC) to 24 hours,
+# every 5 minutes, 2026-09-22: root-caused testing Luke Davis's reconnect
+# flow that the daytime gap meant sync-chain hops that hit their own
+# MAX_CHAIN_HOPS cap (see sync-chain.ts) — or matching/description work
+# left over from any trigger — just sat completely untouched for hours
+# outside the overnight window, confirmed directly via zero
+# external_drain_batch/external_sync_resume/external_match_drain_batch
+# sync_log events across a 3.5+ hour daytime stretch. The endpoint itself
+# is cheap when there's nothing to do (each phase's own discovery query is
+# a fast no-op once nothing's pending), so there's no real cost to running
+# it around the clock instead of only overnight.
+#
 # IMPORTANT — GitHub Actions' `schedule` trigger is explicitly documented
 # as best-effort, not exact: GitHub states scheduled workflows can be
 # delayed, and are further delayed or dropped entirely during periods of
 # high platform load, with delays of many minutes being commonly reported
-# at short intervals like the 2-minute cadence used here on weekdays. This
-# workflow is still worth having — GitHub Actions is a proper, heavily-used
-# platform (not a small free-tier hobby scheduler) and a failed/skipped run
-# shows up in this repo's Actions tab with an optional failure-notification
-# email, which cron-job.org's free tier never offered — but it is NOT a
-# guarantee of exact 2-minute timing, and shouldn't be treated as one.
+# at short intervals like the 5-minute cadence used here. This workflow is
+# still worth having — GitHub Actions is a proper, heavily-used platform
+# (not a small free-tier hobby scheduler) and a failed/skipped run shows up
+# in this repo's Actions tab with an optional failure-notification email,
+# which cron-job.org's free tier never offered — but it is NOT a guarantee
+# of exact 5-minute timing, and shouldn't be treated as one.
 on:
   schedule:
-    # Weekdays (Mon-Fri), every 2 minutes, 03:00-06:58 UTC ("3am-7am").
-    - cron: "*/2 3-6 * * 1-5"
-    # Weekends (Sat-Sun), every 5 minutes, 03:00-06:55 UTC.
-    - cron: "*/5 3-6 * * 0,6"
+    # Every 5 minutes, 24 hours a day, every day.
+    - cron: "*/5 * * * *"
   # Manual trigger from the Actions tab — useful for confirming the
   # endpoint + secret are wired up correctly without waiting on the
   # schedule.
