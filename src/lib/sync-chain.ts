@@ -1,4 +1,10 @@
-import { pool } from "@/lib/db";
+// Every runSyncChunk/finishSync call in this file passes syncBatchPool
+// explicitly (never the shared `pool`) — confirmed necessary in production,
+// not precautionary: testing Luke Davis's reconnect, the chain died with
+// "timeout exceeded when trying to connect" at hop 3 on every run before
+// this pool existed, consistently. See syncBatchPool's own comment in db.ts
+// for the full root cause.
+import { syncBatchPool } from "@/lib/db";
 import { runSyncChunk, finishSync } from "@/lib/sync-engine";
 import { triggerMatchChain } from "@/lib/match-chain";
 import { triggerDescriptionChain } from "@/lib/description-chain";
@@ -156,7 +162,7 @@ export async function runSyncChunkAndChain(userId: string, hop = 0): Promise<voi
 
   let result;
   try {
-    result = await runSyncChunk(userId, { budgetMs: CHAIN_TIME_BUDGET_MS });
+    result = await runSyncChunk(userId, { budgetMs: CHAIN_TIME_BUDGET_MS, dbPool: syncBatchPool });
   } catch (err) {
     console.error(`[sync-chain] Chunk failed for user ${userId} at hop ${hop}:`, err);
     return;
@@ -179,7 +185,7 @@ export async function runSyncChunkAndChain(userId: string, hop = 0): Promise<voi
 
   if (result.newDbIds.length > 0) {
     await withDeadline(
-      finishSync(userId, result.newDbIds).catch((err) => {
+      finishSync(userId, result.newDbIds, syncBatchPool).catch((err) => {
         console.error(`[sync-chain] finishSync failed for user ${userId} at hop ${hop}:`, err);
       }),
       FINISH_SYNC_RACE_BUDGET_MS,
@@ -231,7 +237,7 @@ const EXTERNAL_SYNC_RESUME_TIME_BUDGET_MS = 10_000;
 const EXTERNAL_SYNC_RESUME_STALE_SECONDS = 90;
 
 async function pickNextStaleSyncCandidate(): Promise<{ id: string; first_name: string | null } | null> {
-  const { rows } = await pool.query<{ id: string; first_name: string | null }>(
+  const { rows } = await syncBatchPool.query<{ id: string; first_name: string | null }>(
     `SELECT id, first_name FROM users
      WHERE sync_status = 'syncing'
        AND sync_progress_at < NOW() - INTERVAL '${EXTERNAL_SYNC_RESUME_STALE_SECONDS} seconds'
@@ -271,7 +277,7 @@ export async function runExternalSyncResumeBatch(
     return { candidateId: null, timedOut: false };
   }
 
-  const syncPromise = runSyncChunk(candidate.id, { budgetMs: timeBudgetMs })
+  const syncPromise = runSyncChunk(candidate.id, { budgetMs: timeBudgetMs, dbPool: syncBatchPool })
     .then((result) => ({ timedOut: false as const, result }))
     .catch((err) => ({ timedOut: false as const, error: err as unknown }));
 
@@ -317,7 +323,7 @@ export async function runExternalSyncResumeBatch(
     // finishSync here could blow that budget the same way it broke the
     // reactive chain.
     await withDeadline(
-      finishSync(candidate.id, result.newDbIds).catch((err) => {
+      finishSync(candidate.id, result.newDbIds, syncBatchPool).catch((err) => {
         console.error(`[external-sync-resume] finishSync failed for ${candidate.first_name ?? candidate.id}:`, err);
       }),
       FINISH_SYNC_RACE_BUDGET_MS,

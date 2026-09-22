@@ -5,6 +5,7 @@ const globalForPg = globalThis as unknown as {
   _pgPool?: Pool;
   _pgDescriptionBatchPool?: Pool;
   _pgMatchBatchPool?: Pool;
+  _pgSyncBatchPool?: Pool;
 };
 
 // REVERTED: a locally-reproduced "self-signed certificate in certificate
@@ -108,6 +109,31 @@ if (isNewMatchBatchPool) {
 }
 if (process.env.NODE_ENV !== "production") {
   globalForPg._pgMatchBatchPool = matchBatchPool;
+}
+
+// Dedicated pool for the sync-continuation chain (sync-chain.ts). Root
+// cause this exists to fix (2026-09-22): the reactive self-dispatch chain
+// reliably died at hop 3 every run testing Luke Davis's reconnect, always
+// with "timeout exceeded when trying to connect" — the same Supabase
+// pooler-exhaustion failure match-chain.ts's equivalent drain hit and had
+// to be worked around for (see MATCH_DRAIN_CHAINING_ENABLED there), caused
+// by runSyncChunk/finishSync competing with live user-facing traffic (the
+// Strava webhook, real dashboard visits) for the shared `pool`'s tiny
+// production max (3) — worse here than for matching, since each hop fires
+// a fresh serverless invocation within milliseconds of the last (confirmed
+// in production logs: sub-second gaps between hops), so a burst of hops
+// can hold several connections from this pool at once. Same fix as
+// matchBatchPool/descriptionBatchPool: its own small dedicated pool means
+// the sync chain can never starve live traffic, or be starved by it.
+export const syncBatchPool = globalForPg._pgSyncBatchPool ?? makeBatchPool();
+const isNewSyncBatchPool = !globalForPg._pgSyncBatchPool;
+if (isNewSyncBatchPool) {
+  syncBatchPool.on("error", (err) => {
+    console.error("[db] Idle sync-batch-pool client error:", err.message);
+  });
+}
+if (process.env.NODE_ENV !== "production") {
+  globalForPg._pgSyncBatchPool = syncBatchPool;
 }
 
 export async function query<T extends QueryResultRow = QueryResultRow>(

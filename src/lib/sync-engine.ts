@@ -1,3 +1,4 @@
+import type { Pool } from "pg";
 import { pool } from "@/lib/db";
 import {
   getValidAccessToken,
@@ -110,14 +111,24 @@ export type SyncChunkResult =
  * callers (the SSE route, the dashboard self-heal nudge, the cron sweep) are
  * expected to call this again later to continue. Only on "complete" does
  * sync_status flip to 'complete' and last_synced_at update.
+ *
+ * `dbPool` defaults to the shared `pool` (correct for the browser-facing SSE
+ * route — one live request, not worth a dedicated pool for). The
+ * self-dispatching sync chain (sync-chain.ts) passes syncBatchPool instead —
+ * see that pool's comment in db.ts for why: rapid-fire hops (confirmed
+ * sub-second gaps between them in production) competing with live traffic
+ * for the shared pool's tiny production max (3) reliably exhausted it by
+ * hop 3 in testing, the same class of failure match-chain.ts's equivalent
+ * drain already had to work around.
  */
 export async function runSyncChunk(
   userId: string,
-  opts: { budgetMs?: number; onProgress?: (p: SyncProgress) => void; signal?: AbortSignal } = {}
+  opts: { budgetMs?: number; onProgress?: (p: SyncProgress) => void; signal?: AbortSignal; dbPool?: Pool } = {}
 ): Promise<SyncChunkResult> {
   const budgetMs = opts.budgetMs ?? DEFAULT_BUDGET_MS;
   const onProgress = opts.onProgress ?? (() => {});
   const signal = opts.signal;
+  const dbPool = opts.dbPool ?? pool;
   const startedAt = Date.now();
   const overBudget = () => Date.now() - startedAt > budgetMs;
   const aborted = () => signal?.aborted ?? false;
@@ -143,7 +154,7 @@ export async function runSyncChunk(
   // Runs before sync_status is ever touched (see the UPDATE below), so a
   // gated user's sync_status is left exactly as it was — no risk of this
   // check itself leaving someone stuck in 'syncing'.
-  const { rows: [user] } = await pool.query<{ subscription_status: string }>(
+  const { rows: [user] } = await dbPool.query<{ subscription_status: string }>(
     "SELECT subscription_status FROM users WHERE id = $1",
     [userId]
   );
@@ -170,7 +181,7 @@ export async function runSyncChunk(
             name: activity.name,
           });
         }
-        const result = await pool.query<{ id: string }>(
+        const result = await dbPool.query<{ id: string }>(
           `INSERT INTO activities (
              user_id, strava_activity_id, name, activity_type,
              distance, moving_time, start_date, polyline, geometry
@@ -202,9 +213,9 @@ export async function runSyncChunk(
     };
 
     const heartbeat = () =>
-      pool.query("UPDATE users SET sync_progress_at = NOW() WHERE id = $1", [userId]).catch(() => {});
+      dbPool.query("UPDATE users SET sync_progress_at = NOW() WHERE id = $1", [userId]).catch(() => {});
 
-    const boundsRow = await pool.query<{ after_unix: string; before_unix: string; count: string }>(
+    const boundsRow = await dbPool.query<{ after_unix: string; before_unix: string; count: string }>(
       `SELECT EXTRACT(EPOCH FROM MAX(start_date))::bigint AS after_unix,
               EXTRACT(EPOCH FROM MIN(start_date))::bigint AS before_unix,
               COUNT(*)::text AS count
@@ -215,7 +226,7 @@ export async function runSyncChunk(
     const afterUnix: number | null = boundsRow.rows[0]?.after_unix ? parseInt(boundsRow.rows[0].after_unix) : null;
     const beforeUnix: number | null = boundsRow.rows[0]?.before_unix ? parseInt(boundsRow.rows[0].before_unix) : null;
 
-    await pool.query(
+    await dbPool.query(
       "UPDATE users SET sync_status = 'syncing', sync_progress_at = NOW() WHERE id = $1",
       [userId]
     );
@@ -234,7 +245,7 @@ export async function runSyncChunk(
 
         const activities = await fetchPage({ page, after: afterUnix });
         if (activities === "rate_limited") {
-          await pool.query("UPDATE users SET sync_status = 'error' WHERE id = $1", [userId]).catch(() => {});
+          await dbPool.query("UPDATE users SET sync_status = 'error' WHERE id = $1", [userId]).catch(() => {});
           return logAndReturn({ status: "rate_limited", message: "Strava rate limit reached. Please try again in a few minutes." });
         }
         if (activities.length === 0) break;
@@ -260,7 +271,7 @@ export async function runSyncChunk(
         if (cursor !== null) params.before = cursor;
         const activities = await fetchPage(params);
         if (activities === "rate_limited") {
-          await pool.query("UPDATE users SET sync_status = 'error' WHERE id = $1", [userId]).catch(() => {});
+          await dbPool.query("UPDATE users SET sync_status = 'error' WHERE id = $1", [userId]).catch(() => {});
           return logAndReturn({ status: "rate_limited", message: "Strava rate limit reached. Please try again in a few minutes." });
         }
         if (activities.length === 0) break;
@@ -276,7 +287,7 @@ export async function runSyncChunk(
       }
     }
 
-    await pool.query(
+    await dbPool.query(
       `UPDATE users SET sync_status = 'complete', last_synced_at = NOW() WHERE id = $1`,
       [userId]
     );
@@ -284,7 +295,7 @@ export async function runSyncChunk(
   } catch (err) {
     const message = err instanceof Error ? err.message : "An unexpected error occurred";
     console.error("[sync-engine] runSyncChunk error:", err);
-    await pool.query("UPDATE users SET sync_status = 'error' WHERE id = $1", [userId]).catch(() => {});
+    await dbPool.query("UPDATE users SET sync_status = 'error' WHERE id = $1", [userId]).catch(() => {});
     return logAndReturn({ status: "error", message });
   }
 }
@@ -294,17 +305,20 @@ export async function runSyncChunk(
  * trails near the newly-saved activities (not the whole trails table — see
  * computeTrailProgress), then writes Strava descriptions for matched
  * activities if the user has opted in. Safe to call multiple times.
+ *
+ * `dbPool` — see runSyncChunk's doc comment; same reasoning, same default.
  */
 export async function finishSync(
   userId: string,
-  newDbIds: string[]
+  newDbIds: string[],
+  dbPool: Pool = pool
 ): Promise<{ matchedTrails: number; descUpdated: number }> {
   let matchedTrails = 0;
   let descUpdated = 0;
 
   if (newDbIds.length === 0) return { matchedTrails, descUpdated };
 
-  const { rows: [userPrefs] } = await pool.query<{
+  const { rows: [userPrefs] } = await dbPool.query<{
     strava_description_updates: boolean;
     description_mode: DescriptionMode;
   }>(
@@ -320,7 +334,7 @@ export async function finishSync(
     // 40 happen to come back from the bbox scan in no particular order.
     // Wrapped in a subquery because Postgres rejects an ORDER BY expression
     // on SELECT DISTINCT unless it's plain output columns.
-    const { rows: nearbyTrails } = await pool.query<{ id: string }>(
+    const { rows: nearbyTrails } = await dbPool.query<{ id: string }>(
       `SELECT id FROM (
          SELECT DISTINCT t.id, t.category, t.name
          FROM activities a
@@ -356,7 +370,7 @@ export async function finishSync(
       // (both small sets already), so a precise per-pair proximity check
       // is cheap here even though it isn't at the full-account scale
       // ACTIVITY_MATCH_SQL normally runs at.
-      await pool.query(
+      await dbPool.query(
         `INSERT INTO activity_trail_matches (activity_id, trail_id, user_id)
          SELECT a.id, t.id, $1
          FROM activities a
@@ -371,7 +385,7 @@ export async function finishSync(
     }
 
     if (trailIds.length > 0) {
-      matchedTrails = await computeTrailProgress(userId, trailIds);
+      matchedTrails = await computeTrailProgress(userId, trailIds, dbPool);
     }
     logSyncEvent(userId, "matching_complete", { matchedTrails });
 
@@ -396,7 +410,7 @@ export async function finishSync(
 
   if (wantsDescriptionUpdate) {
     const mode: DescriptionMode = userPrefs.description_mode ?? "full";
-    const { rows: toUpdate } = await pool.query<{ id: string; strava_activity_id: string }>(
+    const { rows: toUpdate } = await dbPool.query<{ id: string; strava_activity_id: string }>(
       `SELECT id, strava_activity_id::text
        FROM activities
        WHERE id = ANY($1::uuid[])
@@ -406,7 +420,7 @@ export async function finishSync(
     );
     for (const act of toUpdate) {
       try {
-        const matches = await getActivityTrailMatches(userId, act.id);
+        const matches = await getActivityTrailMatches(userId, act.id, dbPool);
 
         // matches.length === 0 is ambiguous — getActivityTrailMatches only
         // returns a trail once user_trail_progress has a real row for it,
@@ -426,7 +440,7 @@ export async function finishSync(
         // checkpoints strava_description_updated on any normal completion
         // either way, so there's nothing left for this caller to pre-filter
         // or branch on.
-        const updated = await writeTrailDescription(userId, act.id, parseInt(act.strava_activity_id), matches, mode);
+        const updated = await writeTrailDescription(userId, act.id, parseInt(act.strava_activity_id), matches, mode, 0, undefined, dbPool);
         if (updated) descUpdated++;
       } catch (err) {
         if (err instanceof ScopeError) {
@@ -445,7 +459,7 @@ export async function finishSync(
         // scan (or a future sync) picks it up.
         const { giveUp } = await recordDescriptionUpdateFailure(userId, act.id).catch(() => ({ giveUp: false }));
         if (giveUp) {
-          await pool.query("UPDATE activities SET strava_description_updated = TRUE WHERE id = $1", [act.id]).catch(() => {});
+          await dbPool.query("UPDATE activities SET strava_description_updated = TRUE WHERE id = $1", [act.id]).catch(() => {});
         }
       }
     }
