@@ -30,7 +30,7 @@ export const maxDuration = 60;
 // Piggybacking one small matching batch onto every description-drain call
 // means matching now advances on the exact same external cadence as
 // descriptions, with no separate scheduler to set up (originally ~2min,
-// widened to a 24-hour 5-minute cadence 2026-09-22 — see drain.yml).
+// widened to a 24-hour 10-minute cadence 2026-09-22 — see drain.yml).
 //
 // Sync resume added to this same call, 2026-09-22, same reasoning again:
 // the reactive sync chain (sync-chain.ts's runSyncChunkAndChain) only fires

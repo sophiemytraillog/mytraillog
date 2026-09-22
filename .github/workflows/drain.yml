@@ -14,31 +14,38 @@ name: Drain batch (descriptions + matching + sync resume)
 # cron-job.org's side, not this app's.
 #
 # Widened from an overnight-only window (03:00-06:58 UTC) to 24 hours,
-# every 5 minutes, 2026-09-22: root-caused testing Luke Davis's reconnect
-# flow that the daytime gap meant sync-chain hops that hit their own
-# MAX_CHAIN_HOPS cap (see sync-chain.ts) — or matching/description work
-# left over from any trigger — just sat completely untouched for hours
-# outside the overnight window, confirmed directly via zero
-# external_drain_batch/external_sync_resume/external_match_drain_batch
-# sync_log events across a 3.5+ hour daytime stretch. The endpoint itself
-# is cheap when there's nothing to do (each phase's own discovery query is
-# a fast no-op once nothing's pending), so there's no real cost to running
-# it around the clock instead of only overnight.
+# 2026-09-22: root-caused testing Luke Davis's reconnect flow that the
+# daytime gap meant sync-chain hops that hit their own MAX_CHAIN_HOPS cap
+# (see sync-chain.ts) — or matching/description work left over from any
+# trigger — just sat completely untouched for hours outside the overnight
+# window, confirmed directly via zero external_drain_batch/
+# external_sync_resume/external_match_drain_batch sync_log events across a
+# 3.5+ hour daytime stretch. The endpoint itself is cheap when there's
+# nothing to do (each phase's own discovery query is a fast no-op once
+# nothing's pending), so there's no real cost to running it around the
+# clock instead of only overnight.
+#
+# Cadence is every 10 minutes (144 runs/day), not 5 (288 runs/day) — this
+# repo is private, and GitHub Actions' free tier caps at 2,000 minutes/month.
+# Even though each run's actual billed duration is only a few seconds (well
+# under the 2-minute job timeout), 10 minutes keeps comfortable headroom
+# under that cap rather than relying on real usage staying far below the
+# worst case.
 #
 # IMPORTANT — GitHub Actions' `schedule` trigger is explicitly documented
 # as best-effort, not exact: GitHub states scheduled workflows can be
 # delayed, and are further delayed or dropped entirely during periods of
 # high platform load, with delays of many minutes being commonly reported
-# at short intervals like the 5-minute cadence used here. This workflow is
-# still worth having — GitHub Actions is a proper, heavily-used platform
-# (not a small free-tier hobby scheduler) and a failed/skipped run shows up
-# in this repo's Actions tab with an optional failure-notification email,
-# which cron-job.org's free tier never offered — but it is NOT a guarantee
-# of exact 5-minute timing, and shouldn't be treated as one.
+# at short intervals like the one used here. This workflow is still worth
+# having — GitHub Actions is a proper, heavily-used platform (not a small
+# free-tier hobby scheduler) and a failed/skipped run shows up in this
+# repo's Actions tab with an optional failure-notification email, which
+# cron-job.org's free tier never offered — but it is NOT a guarantee of
+# exact timing, and shouldn't be treated as one.
 on:
   schedule:
-    # Every 5 minutes, 24 hours a day, every day.
-    - cron: "*/5 * * * *"
+    # Every 10 minutes, 24 hours a day, every day.
+    - cron: "*/10 * * * *"
   # Manual trigger from the Actions tab — useful for confirming the
   # endpoint + secret are wired up correctly without waiting on the
   # schedule.
