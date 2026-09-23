@@ -77,7 +77,14 @@ export async function GET(request: NextRequest) {
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret) {
     const auth = request.headers.get("authorization");
-    if (auth !== `Bearer ${cronSecret}`) {
+    // ?secret= query param accepted alongside the Authorization header
+    // (2026-09-23) — a plain link (e.g. tapped from the "kick this along"
+    // link in the new-signup alert email, see settings/route.ts) can't set
+    // a custom header, so this is what lets that link actually work from a
+    // phone without needing curl/Postman. Same CRON_SECRET value, no new
+    // secret to provision; GitHub Actions' header-based call is unaffected.
+    const querySecret = request.nextUrl.searchParams.get("secret");
+    if (auth !== `Bearer ${cronSecret}` && querySecret !== cronSecret) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
   } else {

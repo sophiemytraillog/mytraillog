@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { query } from "@/lib/db";
 import { ADMIN_USER_ID } from "@/lib/admin";
 import RematchButton from "./RematchButton";
+import ResyncButton from "./ResyncButton";
 import SystemHealthButton from "./SystemHealthButton";
 
 // Keep in sync with DAILY_UPDATE_BUDGET in src/lib/trail-descriptions.ts —
@@ -254,7 +255,7 @@ export default async function AdminPage() {
                   // with real geometry but nothing matched to any trail.
                   const anomaly = parseInt(u.geometry_count) > 0 && parseInt(u.trail_match_count) === 0;
                   return (
-                    <tr key={u.id}>
+                    <tr key={u.id} id={`user-${u.id}`}>
                       <td className="px-4 py-2.5 text-[#2C2520]">
                         {u.first_name} {u.last_name}
                       </td>
@@ -273,7 +274,10 @@ export default async function AdminPage() {
                         {u.trail_match_count}
                       </td>
                       <td className="px-4 py-2.5">
-                        <RematchButton userId={u.id} />
+                        <div className="flex items-center gap-3">
+                          <ResyncButton userId={u.id} />
+                          <RematchButton userId={u.id} />
+                        </div>
                       </td>
                     </tr>
                   );

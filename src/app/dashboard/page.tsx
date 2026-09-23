@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { waitUntil } from "@vercel/functions";
 import { query } from "@/lib/db";
-import { getMatchProgress } from "@/lib/match-trails";
+import { getMatchProgress, getNationalTrailMatchProgress } from "@/lib/match-trails";
 import { triggerMatchChain } from "@/lib/match-chain";
 import { triggerDrainIfNotRunToday } from "@/lib/description-chain";
 import { hasBasicAccess, type SubscriptionStatus } from "@/lib/subscription";
@@ -192,9 +192,11 @@ export default async function Dashboard({
   // this to show "Matching trails: X of Y checked" and picks up wherever
   // this left off instead of waiting on the daily cron sweep.
   let matchProgress = { totalChecked: 0, totalTrails: 0 };
+  let nationalMatchProgress = { checked: 0, total: 0 };
   if (userId) {
     try {
       matchProgress = await getMatchProgress(userId);
+      nationalMatchProgress = await getNationalTrailMatchProgress(userId);
     } catch (err) {
       console.error("[dashboard] Failed to load match progress:", err);
     }
@@ -216,6 +218,22 @@ export default async function Dashboard({
     waitUntil(triggerDrainIfNotRunToday());
   }
 
+  // First-sync banner (2026-09-23 request): shown in place of the normal
+  // dashboard while a new account is still catching up, so someone who
+  // just connected doesn't land on an empty-looking trail list/map before
+  // there's anything to show. Gated on National Trails specifically (not
+  // the full ~1,181-trail catalog) because matching always processes those
+  // first — reaching 20/20 there is a fast, meaningful "your headline
+  // trails are ready" signal, well before the full background catch-up
+  // finishes. Requires basicAccess so a grace_period/expired account (which
+  // can't sync/match further anyway) never gets stuck showing this.
+  const showFirstSyncBanner =
+    !!userId &&
+    hasBasicAccess(subscriptionStatus) &&
+    (stats?.sync_status === "syncing" || matchProgress.totalChecked < matchProgress.totalTrails) &&
+    nationalMatchProgress.total > 0 &&
+    nationalMatchProgress.checked < nationalMatchProgress.total;
+
   return (
     <DashboardClient
       athlete={athlete}
@@ -231,6 +249,7 @@ export default async function Dashboard({
       subscriptionStatus={subscriptionStatus}
       trialEndsAt={trialEndsAt}
       contactEmail={contactEmail}
+      showFirstSyncBanner={showFirstSyncBanner}
     />
   );
 }

@@ -548,3 +548,24 @@ export async function getMatchProgress(userId: string): Promise<{ totalChecked: 
   );
   return { totalTrails: parseInt(totals.total), totalChecked: parseInt(totals.checked) };
 }
+
+// National-Trails-only slice of the same progress, used by dashboard/
+// page.tsx's first-sync banner (2026-09-23) — matching always processes
+// National Trails first (see MATCH_SQL callers' ORDER BY (category =
+// 'national_trail') DESC elsewhere), so "all National Trails checked" is a
+// meaningful, fast-to-reach signal that a new account's headline trails are
+// ready, well before the full ~1,181-trail catalog finishes in the
+// background.
+export async function getNationalTrailMatchProgress(
+  userId: string
+): Promise<{ checked: number; total: number }> {
+  const { rows: [totals] } = await pool.query<{ total: string; checked: string }>(
+    `SELECT
+       (SELECT COUNT(*) FROM trails WHERE category = 'national_trail') AS total,
+       (SELECT COUNT(*) FROM trail_match_checks c
+          JOIN trails t ON t.id = c.trail_id
+          WHERE c.user_id = $1 AND t.category = 'national_trail') AS checked`,
+    [userId]
+  );
+  return { total: parseInt(totals.total), checked: parseInt(totals.checked) };
+}

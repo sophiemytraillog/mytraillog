@@ -4,6 +4,7 @@ import { query } from "@/lib/db";
 import { sendNotificationEmail } from "@/lib/email";
 import { hasBasicAccess } from "@/lib/subscription";
 import { getSubscriptionStatus } from "@/lib/subscription-db";
+import { CHAIN_DISPATCH_ORIGIN } from "@/lib/chain-origin";
 
 export async function PATCH(request: NextRequest) {
   const userId = cookies().get("strava_user_id")?.value;
@@ -102,10 +103,24 @@ export async function PATCH(request: NextRequest) {
     if (user && user.previous_email === null) {
       const name = [user.first_name, user.last_name].filter(Boolean).join(" ") || "Unknown";
       const connectedAt = (user.trial_started_at ?? user.created_at).toISOString();
+      // Admin dashboard link jumps straight to this user's row (see
+      // admin/page.tsx's id={`user-${u.id}`} on each <tr>) instead of just
+      // linking to /admin generally — 2026-09-23 request, so opening the
+      // email lands right on the account to watch, not a full user table to
+      // scroll through. Drain-batch link lets the trigger be pulled from a
+      // phone with one tap (no header support needed — see drain-batch's
+      // ?secret= query-param fallback) if a new signup looks stalled before
+      // the next scheduled drain run.
+      const cronSecret = process.env.CRON_SECRET;
+      const drainLink = cronSecret
+        ? `${CHAIN_DISPATCH_ORIGIN}/api/internal/drain-batch?secret=${cronSecret}`
+        : `${CHAIN_DISPATCH_ORIGIN}/api/internal/drain-batch`;
       await sendNotificationEmail(`New signup: ${name}`, [
         `Name: ${name}`,
         `Email: ${contact_email.trim()}`,
         `Connected: ${connectedAt}`,
+        `Admin dashboard: ${CHAIN_DISPATCH_ORIGIN}/admin#user-${userId}`,
+        `Kick their sync/matching/descriptions along: ${drainLink}`,
       ]);
     }
   }

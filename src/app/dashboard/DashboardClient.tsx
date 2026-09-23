@@ -67,6 +67,7 @@ interface Props {
   subscriptionStatus: SubscriptionStatus;
   trialEndsAt: Date | null;
   contactEmail: string | null;
+  showFirstSyncBanner: boolean;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -123,6 +124,53 @@ function GracePeriodBanner({ trialEndsAt }: { trialEndsAt: Date | null }) {
   );
 }
 
+// Shown in place of the normal dashboard while a new account is still
+// catching up (see showFirstSyncBanner's gating in page.tsx) — a first-time
+// visitor otherwise lands on an empty-looking trail list/map with nothing
+// to see yet. Keeps the real SyncButton/TrailMatchProgress embedded (not
+// just static copy) so there's genuine, live feedback that something is
+// actually happening, not just a placeholder message. This is a server-
+// computed gate (re-evaluated on the next full page load/refresh, e.g. via
+// SyncButton's own "Refresh" button once it settles into its background
+// state), not a live client-side flip — matches the "check back soon"
+// framing rather than needing its own polling loop.
+function FirstSyncBanner({
+  autoSync, activityCount, onSyncComplete, hasBasicAccess, matchProgress, lastSyncedAt,
+}: {
+  autoSync: boolean;
+  activityCount: number;
+  onSyncComplete: () => void;
+  hasBasicAccess: boolean;
+  matchProgress: { totalChecked: number; totalTrails: number };
+  lastSyncedAt: Date | null;
+}) {
+  return (
+    <div className="flex-1 flex items-center justify-center px-6 py-10">
+      <div className="max-w-md w-full bg-white border border-[#E5DED4] rounded-2xl px-6 py-8 text-center">
+        <p className="text-3xl mb-3" aria-hidden="true">🥾</p>
+        <h1 className="text-lg font-bold text-[#2C2520] mb-2 leading-snug">
+          We&apos;re crunching through your Strava history
+        </h1>
+        <p className="text-[#8A7F72] text-sm leading-relaxed mb-5">
+          This can take a little while for the first sync. Go enjoy a walk and check back soon —
+          your trails will be waiting for you!
+        </p>
+        <SyncButton
+          autoSync={autoSync}
+          initialActivityCount={activityCount}
+          onSyncComplete={onSyncComplete}
+          hasBasicAccess={hasBasicAccess}
+        />
+        <TrailMatchProgress
+          key={lastSyncedAt ? lastSyncedAt.getTime() : "never"}
+          initialChecked={matchProgress.totalChecked}
+          initialTotal={matchProgress.totalTrails}
+        />
+      </div>
+    </div>
+  );
+}
+
 function LogoIcon({ className }: { className?: string }) {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
@@ -155,7 +203,7 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
 
 export default function DashboardClient({
   athlete, stats, trails, activityCount, autoSync, stravaDescriptionUpdates, descriptionMode, hasWriteScope, includeCycling, matchProgress,
-  subscriptionStatus, trialEndsAt, contactEmail,
+  subscriptionStatus, trialEndsAt, contactEmail, showFirstSyncBanner,
 }: Props) {
   const trialStatusText = formatTrialStatus(subscriptionStatus, trialEndsAt);
   // Feature-gating flags (2026-09-30 request) — basic covers sync/matching/
@@ -357,6 +405,16 @@ export default function DashboardClient({
         />
       </nav>
 
+      {showFirstSyncBanner ? (
+        <FirstSyncBanner
+          autoSync={autoSync}
+          activityCount={activityCount}
+          onSyncComplete={() => setLastSyncedAt(new Date())}
+          hasBasicAccess={basicAccess}
+          matchProgress={matchProgress}
+          lastSyncedAt={lastSyncedAt}
+        />
+      ) : (
       <div className="flex-1 px-4 py-4 sm:px-6 sm:py-6 max-w-7xl mx-auto w-full">
 
         {subscriptionStatus === "grace_period" && <GracePeriodBanner trialEndsAt={trialEndsAt} />}
@@ -761,6 +819,7 @@ export default function DashboardClient({
 
         </div>
       </div>
+      )}
 
       {requestModalName !== null && (
         <RequestTrailModal
