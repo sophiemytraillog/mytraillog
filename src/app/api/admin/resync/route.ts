@@ -10,20 +10,22 @@ import { logSyncEvent } from "@/lib/sync-log";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-// Manual "push this one along" button for /admin (2026-09-23 request) — for
-// a new signup that looks stalled between reactive-chain hop limits and the
-// next external drain run, this does one bounded round of all three phases
-// (sync, matching, descriptions) for a SINGLE user in one click, rather than
-// needing Claude Code (or a raw curl call) to kick it. Same three
-// primitives and dedicated batch pools the reactive chains and
+// Backs /admin's single "Kick user" button (KickUserButton.tsx) —
+// 2026-09-23, replacing what were originally two separate buttons
+// ("Re-run sync" and "Re-run matching") with one that does everything.
+// For a new signup that looks stalled between reactive-chain hop limits
+// and the next external drain run, this does one bounded round of all
+// three phases (sync, matching, descriptions) for a SINGLE user in one
+// click, rather than needing Claude Code (or a raw curl call) to kick it.
+// Same three primitives and dedicated batch pools the reactive chains and
 // drain-batch/route.ts already use — this isn't a new code path, just a
 // per-user, admin-triggered entry point into the existing ones.
 //
 // One call only ever covers one bounded round (sync chunk + matching batch
 // + description batch, budget-shared like drain-batch), same "never the
 // whole backlog in one shot" reasoning as everywhere else in this app —
-// the client button (ResyncButton.tsx) loops calling this until `done` is
-// true, mirroring RematchButton's existing loop-until-done pattern.
+// KickUserButton.tsx loops calling this until `done` is true, same
+// loop-until-done pattern used throughout /admin's other buttons.
 const TOTAL_BUDGET_MS = 45_000;
 const MIN_USEFUL_MATCH_BUDGET_MS = 3_000;
 const MIN_USEFUL_DESC_BUDGET_MS = 3_000;
@@ -37,7 +39,7 @@ const MATCH_PAGE_SIZE = 30;
 // pattern already exists for in sync-chain.ts. Confirmed happening here in
 // practice for Luke Davis: this route hit Vercel's raw 60s
 // FUNCTION_INVOCATION_TIMEOUT, which returns Vercel's own HTML error page
-// instead of this route's JSON — and ResyncButton.tsx's res.json() call
+// instead of this route's JSON — and the client button's res.json() call
 // crashed trying to parse it ("Unexpected token 'A', "An error o"... is
 // not valid JSON"), surfacing as a confusing client-side error rather than
 // a clean "try again". Racing the whole three-phase run against a hard

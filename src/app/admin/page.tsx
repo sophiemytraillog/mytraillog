@@ -2,8 +2,7 @@ import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
 import { query } from "@/lib/db";
 import { ADMIN_USER_ID } from "@/lib/admin";
-import RematchButton from "./RematchButton";
-import ResyncButton from "./ResyncButton";
+import KickUserButton from "./KickUserButton";
 import SystemHealthButton from "./SystemHealthButton";
 
 // Keep in sync with DAILY_UPDATE_BUDGET in src/lib/trail-descriptions.ts —
@@ -274,10 +273,7 @@ export default async function AdminPage() {
                         {u.trail_match_count}
                       </td>
                       <td className="px-4 py-2.5">
-                        <div className="flex items-center gap-3">
-                          <ResyncButton userId={u.id} />
-                          <RematchButton userId={u.id} />
-                        </div>
+                        <KickUserButton userId={u.id} />
                       </td>
                     </tr>
                   );
