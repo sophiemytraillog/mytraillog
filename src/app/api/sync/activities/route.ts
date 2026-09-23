@@ -58,6 +58,32 @@ export async function GET(request: NextRequest) {
             message: `Syncing… ${result.fetched} fetched, ${result.saved} saved so far`,
           });
 
+          // Dispatch the next chunk FIRST, before the (potentially slow)
+          // inline matching call below — deliberate ordering, same
+          // principle sync-chain.ts's own runSyncChunkAndChain already
+          // follows for its own dispatch-vs-finishSync race. Root cause
+          // this fixes (2026-09-23, Luke Davis's fresh-signup test): on a
+          // brand-new account's first chunk, runSyncChunk alone can burn
+          // most of its own budget fetching from Strava, leaving little of
+          // this request's 60s Vercel ceiling for the finishSync call below
+          // — confirmed via Vercel's own "Task timed out after 60 seconds"
+          // killing this exact request while finishSync's inline
+          // MAX_TRAILS_PER_FINISH_SYNC-trail matching pass was still
+          // running. With the old ordering, that meant the request died
+          // BEFORE ever reaching this waitUntil() call, so the background
+          // sync chain never started at all — sync sat stalled with no
+          // further hops until the external 10-minute GitHub Actions drain
+          // happened to pick it up. Dispatching first means the next hop is
+          // already queued even if this request gets killed moments later.
+          //
+          // Continue fetching subsequent chunks server-side from here —
+          // closing this tab (or the browser SSE connection dropping for
+          // any other reason) no longer stops the sync. See sync-chain.ts
+          // for why this needs the external-scheduler backstop
+          // (runExternalSyncResumeBatch, wired into drain-batch/route.ts)
+          // alongside it, not just this self-dispatch chain alone.
+          waitUntil(triggerSyncChain(userId));
+
           // Run matching for whatever THIS chunk saved, not just on the
           // final "complete" chunk — still within this same function
           // invocation (bounded by the overall 60s ceiling either way), but
@@ -76,14 +102,6 @@ export async function GET(request: NextRequest) {
           await finishSync(userId, result.newDbIds).catch((err) => {
             console.error("[sync/activities] finishSync on partial chunk failed:", err);
           });
-
-          // Continue fetching subsequent chunks server-side from here —
-          // closing this tab (or the browser SSE connection dropping for
-          // any other reason) no longer stops the sync. See sync-chain.ts
-          // for why this needs the external-scheduler backstop
-          // (runExternalSyncResumeBatch, wired into drain-batch/route.ts)
-          // alongside it, not just this self-dispatch chain alone.
-          waitUntil(triggerSyncChain(userId));
           return;
         }
 
