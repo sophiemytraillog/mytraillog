@@ -32,8 +32,25 @@ export default function ResyncButton({ userId }: { userId: string }) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ userId }),
         });
-        const data: ResyncCallResult & { error?: string } = await res.json();
-        if (!res.ok) throw new Error(data.error ?? "Request failed");
+        // A killed serverless invocation returns Vercel's own HTML 504 page
+        // (or any other non-JSON body), not this route's own JSON — a bare
+        // res.json() crashes on that with a raw, confusing "Unexpected
+        // token 'A', "An error o"... is not valid JSON" instead of a
+        // readable error. Confirmed happening in practice for Luke Davis,
+        // 2026-09-23 — this route's three phases (sync + matching +
+        // descriptions) can occasionally still add up to more than
+        // Vercel's 60s cap despite the shared time budget (see route.ts's
+        // hard-deadline fix). Read as text first so a bad response always
+        // becomes a normal error message here regardless of what's
+        // actually wrong server-side.
+        const rawBody = await res.text();
+        let data: (ResyncCallResult & { error?: string }) | { error: string };
+        try {
+          data = JSON.parse(rawBody);
+        } catch {
+          throw new Error(res.ok ? "Server returned an invalid response" : `Request timed out (HTTP ${res.status}) — try again`);
+        }
+        if (!res.ok || "error" in data) throw new Error(("error" in data && data.error) || "Request failed");
 
         totalSaved += data.sync.saved ?? 0;
         totalMatched += data.matching.matchedThisBatch ?? 0;

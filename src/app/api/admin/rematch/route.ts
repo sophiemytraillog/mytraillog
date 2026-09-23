@@ -11,6 +11,21 @@ export const maxDuration = 60;
 const TIME_BUDGET_MS = 45_000;
 const PAGE_SIZE = 30;
 
+// Hard safety net on top of TIME_BUDGET_MS, 2026-09-23: that budget is only
+// checked BETWEEN trails inside matchNextBatch, not enforced mid-operation
+// — one unusually slow trail can still blow past it and hit Vercel's raw
+// 60s FUNCTION_INVOCATION_TIMEOUT, which returns Vercel's own HTML error
+// page instead of this route's JSON and crashes RematchButton.tsx's
+// res.json() call. Same fix as the sibling /api/admin/resync route.
+const HARD_DEADLINE_MS = 50_000;
+
+function withDeadline<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
 // Manual escape hatch for a user whose sync completed (or is stuck) but
 // somehow ended up with zero trail matches — see the Paul Crowe investigation
 // this route was built for. Resumable across any number of calls (browser
@@ -43,7 +58,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "No such user" }, { status: 404 });
   }
 
-  const result = await matchNextBatch(userId, PAGE_SIZE, TIME_BUDGET_MS);
+  const TIMED_OUT_SENTINEL = Symbol("timedOut");
+  const raced = await withDeadline<Awaited<ReturnType<typeof matchNextBatch>> | typeof TIMED_OUT_SENTINEL>(
+    matchNextBatch(userId, PAGE_SIZE, TIME_BUDGET_MS),
+    HARD_DEADLINE_MS,
+    TIMED_OUT_SENTINEL
+  );
+  const timedOut = raced === TIMED_OUT_SENTINEL;
+  const result = timedOut
+    ? { checkedThisBatch: 0, matchedThisBatch: 0, totalChecked: 0, totalTrails: 0, done: false, hadFailures: false }
+    : raced;
 
   logSyncEvent(userId, "admin_rematch_call", {
     triggeredBy: callerId,
@@ -52,6 +76,7 @@ export async function POST(request: NextRequest) {
     totalChecked: result.totalChecked,
     totalTrails: result.totalTrails,
     done: result.done,
+    timedOut,
   });
 
   return NextResponse.json({
@@ -60,5 +85,6 @@ export async function POST(request: NextRequest) {
     totalChecked: result.totalChecked,
     totalTrails: result.totalTrails,
     done: result.done,
+    timedOut,
   });
 }

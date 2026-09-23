@@ -23,11 +23,24 @@ export default function RematchButton({ userId }: { userId: string }) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ userId }),
         });
-        const data = await res.json();
+        // A killed serverless invocation (Vercel's own 504 timeout page,
+        // not this route's own JSON) or any other non-JSON body would
+        // otherwise crash res.json() itself with a raw, confusing
+        // "Unexpected token '<'/'A'... is not valid JSON" — confirmed
+        // happening in practice via the sibling ResyncButton, 2026-09-23.
+        // Read as text first so a bad response becomes a normal, readable
+        // error instead of an uncaught parse exception.
+        const rawBody = await res.text();
+        let data: { error?: string; totalChecked?: number; totalTrails?: number; matchedTrails?: number; done?: boolean };
+        try {
+          data = JSON.parse(rawBody);
+        } catch {
+          throw new Error(res.ok ? "Server returned an invalid response" : `Request failed (HTTP ${res.status})`);
+        }
         if (!res.ok) throw new Error(data.error ?? "Request failed");
 
-        totalMatched += data.matchedTrails;
-        setMessage(`Checked ${data.totalChecked}/${data.totalTrails} trails…`);
+        totalMatched += data.matchedTrails ?? 0;
+        setMessage(`Checked ${data.totalChecked ?? 0}/${data.totalTrails ?? 0} trails…`);
 
         if (data.done) break;
       }

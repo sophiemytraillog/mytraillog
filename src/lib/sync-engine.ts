@@ -200,16 +200,51 @@ export async function runSyncChunk(
       return pageNew;
     };
 
+    // Retries in place on a non-JSON response body (an HTML error/outage
+    // page, or an edge/CDN error page) even when the HTTP status itself
+    // looked fine (2xx) — confirmed for Luke Davis, 2026-09-23: a raw
+    // "Unexpected token 'A', "An error o"... is not valid JSON" crash. That
+    // kind of failure is genuinely transient in practice (Strava's own API
+    // having a blip, or an intermediate proxy hiccup) — the exact same
+    // request usually succeeds seconds later — so this retries a few times
+    // with a short delay before finally throwing, rather than letting one
+    // bad response kill the whole chunk (and, via runSyncChunk's outer
+    // catch, permanently set sync_status='error' with nothing to
+    // automatically retry it — see that catch block's comment).
+    const FETCH_JSON_MAX_ATTEMPTS = 3;
+    const FETCH_JSON_RETRY_DELAY_MS = 3_000;
     const fetchPage = async (params: Record<string, string | number>) => {
       const url = new URL("https://www.strava.com/api/v3/athlete/activities");
       url.searchParams.set("per_page", String(PER_PAGE));
       for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
-      const res = await fetch(url.toString(), {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (res.status === 429) return "rate_limited" as const;
-      if (!res.ok) throw new Error(`Strava API error ${res.status}: ${await res.text()}`);
-      return res.json() as Promise<StravaActivity[]>;
+
+      for (let attempt = 1; attempt <= FETCH_JSON_MAX_ATTEMPTS; attempt++) {
+        const res = await fetch(url.toString(), {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (res.status === 429) return "rate_limited" as const;
+        if (!res.ok) throw new Error(`Strava API error ${res.status}: ${await res.text()}`);
+
+        const rawBody = await res.text();
+        try {
+          return JSON.parse(rawBody) as StravaActivity[];
+        } catch {
+          logSyncEvent(userId, "strava_non_json_response", {
+            attempt,
+            status: res.status,
+            bodyPreview: rawBody.slice(0, 200),
+          });
+          if (attempt === FETCH_JSON_MAX_ATTEMPTS) {
+            throw new Error(
+              `Strava returned a non-JSON response after ${FETCH_JSON_MAX_ATTEMPTS} attempts: ${rawBody.slice(0, 200)}`
+            );
+          }
+          await new Promise<void>((r) => setTimeout(r, FETCH_JSON_RETRY_DELAY_MS));
+        }
+      }
+      // Unreachable (the loop above always returns or throws) — keeps TS's
+      // control-flow analysis happy about fetchPage's declared return type.
+      throw new Error("fetchPage: exhausted attempts without returning");
     };
 
     const heartbeat = () =>
