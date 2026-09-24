@@ -21,12 +21,19 @@ export async function GET() {
     `https://www.strava.com/oauth/authorize?${params}`
   );
 
+  const secure = process.env.NODE_ENV === "production";
   const cookieOpts = {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure,
     maxAge: 600,
     path: "/",
     sameSite: "lax" as const,
+    // See callback/route.ts's cookieOpts comment for why this is here —
+    // same domain-mismatch root cause applies to this cookie too: if the
+    // OAuth flow starts on a non-canonical host, a host-only state cookie
+    // set here wouldn't be visible when Strava redirects back to
+    // STRAVA_REDIRECT_URI's fixed host, failing CSRF verification.
+    ...(secure ? { domain: ".mytraillog.com" } : {}),
   };
 
   response.cookies.set("strava_oauth_state", state, cookieOpts);

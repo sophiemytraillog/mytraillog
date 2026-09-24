@@ -29,7 +29,14 @@ export async function POST() {
   }
 
   const response = NextResponse.json({ ok: true });
-  response.cookies.delete("strava_user_id");
-  response.cookies.delete("strava_athlete");
+  // Must match the domain/path these cookies are actually set with (see
+  // callback/route.ts's cookieOpts, 2026-09-24) — deleting without
+  // matching them leaves the real, domain-scoped cookie in place, since a
+  // browser only clears a cookie whose Domain+Path attributes match
+  // exactly what it was set with.
+  const secure = process.env.NODE_ENV === "production";
+  const deleteOpts = { path: "/", ...(secure ? { domain: ".mytraillog.com" } : {}) };
+  response.cookies.delete({ name: "strava_user_id", ...deleteOpts });
+  response.cookies.delete({ name: "strava_athlete", ...deleteOpts });
   return response;
 }

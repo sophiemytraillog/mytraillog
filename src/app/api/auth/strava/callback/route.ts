@@ -153,7 +153,27 @@ export async function GET(request: NextRequest) {
 
   const secure = process.env.NODE_ENV === "production";
   const oneYear = 60 * 60 * 24 * 365;
-  const cookieOpts = { httpOnly: true, secure, path: "/", sameSite: "lax" as const };
+  // Root cause of "I keep having to reconnect every visit" (2026-09-24):
+  // with no `domain` set, a cookie is "host-only" — scoped to the EXACT
+  // host that set it, so a cookie set while on www.mytraillog.com is
+  // invisible on the bare apex mytraillog.com and vice versa. Vercel's own
+  // domain redirect normally sends both to the same canonical host, but
+  // that's not a guarantee for every entry point (a stale bookmark, a
+  // shared link predating the redirect, a client that doesn't consistently
+  // follow 301s) — any request that lands on the "wrong" host even once
+  // sets or reads a cookie the other host can't see. The leading-dot
+  // domain form shares the cookie across the apex and every subdomain
+  // (still universally supported, RFC 2965-style). Production-only: a
+  // cookie's Domain attribute must match the page's actual registrable
+  // domain, so setting this while developing on localhost would silently
+  // break cookies there entirely.
+  const cookieOpts = {
+    httpOnly: true,
+    secure,
+    path: "/",
+    sameSite: "lax" as const,
+    ...(secure ? { domain: ".mytraillog.com" } : {}),
+  };
 
   // Minimal session cookie — DB user ID only (tokens stay in the database)
   if (dbUserId) {
@@ -173,7 +193,12 @@ export async function GET(request: NextRequest) {
     { ...cookieOpts, maxAge: oneYear }
   );
 
-  response.cookies.delete("strava_oauth_state");
+  // Must match the domain/path this cookie was actually set with (see
+  // /api/auth/strava's cookieOpts) — deleting without matching them leaves
+  // the original domain-scoped cookie in place until its own 600s expiry,
+  // since a browser only clears a cookie whose Domain+Path attributes
+  // match exactly.
+  response.cookies.delete({ name: "strava_oauth_state", path: "/", ...(secure ? { domain: ".mytraillog.com" } : {}) });
 
   return response;
 }
