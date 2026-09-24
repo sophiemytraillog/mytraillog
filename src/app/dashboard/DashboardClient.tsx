@@ -68,6 +68,7 @@ interface Props {
   trialEndsAt: Date | null;
   contactEmail: string | null;
   showFirstSyncBanner: boolean;
+  needsReauth: boolean;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -119,6 +120,29 @@ function GracePeriodBanner({ trialEndsAt }: { trialEndsAt: Date | null }) {
         className="shrink-0 px-4 py-2 rounded-lg bg-white text-[#C4652A] text-sm font-semibold hover:bg-white/90 transition-colors text-center"
       >
         Subscribe
+      </a>
+    </div>
+  );
+}
+
+// Shown when needs_reauth is set (2026-09-24) — Strava returned a 401/403
+// on an activity:write call, meaning that permission grant is gone and
+// every description write for this account will keep failing until they
+// reconnect. /api/auth/strava re-requests the same scope list (including
+// activity:write) on every visit, so a plain reconnect fixes it — this
+// flag itself gets cleared server-side the moment that reconnect succeeds
+// (see callback/route.ts), so there's nothing else for the user to do.
+function NeedsReauthBanner() {
+  return (
+    <div className="bg-[#C4652A] text-white rounded-2xl px-5 py-4 mb-4 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
+      <p className="text-sm font-medium flex-1 leading-snug">
+        Your Strava connection needs updating - click Connect with Strava to re-authorise.
+      </p>
+      <a
+        href="/api/auth/strava"
+        className="shrink-0 px-4 py-2 rounded-lg bg-white text-[#C4652A] text-sm font-semibold hover:bg-white/90 transition-colors text-center"
+      >
+        Connect with Strava
       </a>
     </div>
   );
@@ -203,7 +227,7 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
 
 export default function DashboardClient({
   athlete, stats, trails, activityCount, autoSync, stravaDescriptionUpdates, descriptionMode, hasWriteScope, includeCycling, matchProgress,
-  subscriptionStatus, trialEndsAt, contactEmail, showFirstSyncBanner,
+  subscriptionStatus, trialEndsAt, contactEmail, showFirstSyncBanner, needsReauth,
 }: Props) {
   const trialStatusText = formatTrialStatus(subscriptionStatus, trialEndsAt);
   // Feature-gating flags (2026-09-30 request) — basic covers sync/matching/
@@ -417,6 +441,7 @@ export default function DashboardClient({
       ) : (
       <div className="flex-1 px-4 py-4 sm:px-6 sm:py-6 max-w-7xl mx-auto w-full">
 
+        {needsReauth && <NeedsReauthBanner />}
         {subscriptionStatus === "grace_period" && <GracePeriodBanner trialEndsAt={trialEndsAt} />}
 
         {/* Stat row — National Trails + Other Trails */}

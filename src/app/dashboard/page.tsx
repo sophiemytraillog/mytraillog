@@ -60,6 +60,7 @@ export default async function Dashboard({
   let subscriptionStatus: SubscriptionStatus = "trial";
   let trialEndsAt: Date | null = null;
   let contactEmail: string | null = null;
+  let needsReauth = false;
   if (userId) {
     try {
       const result = await query<
@@ -72,6 +73,7 @@ export default async function Dashboard({
           subscription_status: SubscriptionStatus;
           trial_ends_at: Date | null;
           contact_email: string | null;
+          needs_reauth: boolean;
         }
       >(
         `SELECT u.last_synced_at,
@@ -86,13 +88,14 @@ export default async function Dashboard({
                 u.subscription_status,
                 u.trial_ends_at,
                 u.contact_email,
+                u.needs_reauth,
                 COUNT(a.id)::text AS activity_count
          FROM users u
          LEFT JOIN activities a ON a.user_id = u.id
          WHERE u.id = $1
          GROUP BY u.last_synced_at, u.sync_status, u.strava_description_updates,
                   u.description_mode, u.strava_scope, u.include_cycling, u.sync_progress_at,
-                  u.subscription_status, u.trial_ends_at, u.contact_email`,
+                  u.subscription_status, u.trial_ends_at, u.contact_email, u.needs_reauth`,
         [userId]
       );
       stats = result.rows[0] ?? null;
@@ -104,6 +107,7 @@ export default async function Dashboard({
       subscriptionStatus = result.rows[0]?.subscription_status ?? "trial";
       trialEndsAt = result.rows[0]?.trial_ends_at ?? null;
       contactEmail = result.rows[0]?.contact_email ?? null;
+      needsReauth = result.rows[0]?.needs_reauth ?? false;
     } catch (err) {
       console.error("[dashboard] Failed to load stats:", err);
     }
@@ -250,6 +254,7 @@ export default async function Dashboard({
       trialEndsAt={trialEndsAt}
       contactEmail={contactEmail}
       showFirstSyncBanner={showFirstSyncBanner}
+      needsReauth={needsReauth}
     />
   );
 }

@@ -195,6 +195,15 @@ async function pickNextDrainCandidate(): Promise<{ id: string; first_name: strin
        -- see subscription.ts's hasBasicAccess (kept in sync manually, since
        -- this runs as raw SQL rather than importing the JS helper).
        AND u.subscription_status IN ('trial', 'active')
+       -- Excluded outright, not just deprioritized like Paul Crowe below —
+       -- 2026-09-24, see schema.sql's needs_reauth comment. Unlike a merely
+       -- slow/failure-prone account, a scope-blocked one can NEVER succeed
+       -- until the user reconnects Strava, so there's no "give them a turn
+       -- once everyone else is caught up" case that ever helps — every pick
+       -- is a guaranteed wasted call, and the least-recently-attempted
+       -- ordering was making that worse by treating their own guaranteed
+       -- failure as making them MORE overdue next round.
+       AND NOT u.needs_reauth
      ORDER BY
        (u.id = $1) ASC,
        COALESCE(

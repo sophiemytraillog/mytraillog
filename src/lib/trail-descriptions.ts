@@ -42,6 +42,15 @@ export async function recordDescriptionUpdateFailure(
   return { giveUp, attempts };
 }
 
+// Best-effort — called right before throwing ScopeError below, so a DB
+// hiccup here should never mask the real error or block it propagating.
+// See schema.sql's needs_reauth comment for the full root-cause writeup;
+// cleared again on the user's next successful OAuth reconnect
+// (strava/callback/route.ts), which always re-requests activity:write.
+async function flagNeedsReauth(userId: string, dbPool: Pool): Promise<void> {
+  await dbPool.query("UPDATE users SET needs_reauth = TRUE WHERE id = $1", [userId]).catch(() => {});
+}
+
 async function fetchWithTimeout(url: string, options: RequestInit, ms = 30_000): Promise<Response> {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), ms);
@@ -387,6 +396,7 @@ export async function writeTrailDescription(
   );
   if (!getRes.ok) {
     if (getRes.status === 403 || getRes.status === 401) {
+      await flagNeedsReauth(userId, dbPool);
       throw new ScopeError(
         `Strava returned ${getRes.status} - reconnect your account to grant activity:write permission.`
       );
@@ -462,6 +472,7 @@ export async function writeTrailDescription(
   );
   if (!putRes.ok) {
     if (putRes.status === 403 || putRes.status === 401) {
+      await flagNeedsReauth(userId, dbPool);
       throw new ScopeError(
         `Strava returned ${putRes.status} - reconnect your account to grant activity:write permission.`
       );

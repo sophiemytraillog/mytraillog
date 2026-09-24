@@ -431,6 +431,21 @@ WHERE trial_started_at IS NULL AND subscription_status != 'active';
 -- conditional on having an email, only the courtesy reminders are.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_email TEXT;
 
+-- Set when a Strava call for this user fails with a 401/403 that
+-- writeTrailDescription's ScopeError signals as "the activity:write grant
+-- is gone, not a transient blip" (trail-descriptions.ts) — cleared again on
+-- their next successful OAuth reconnect (strava/callback/route.ts, which
+-- always re-requests activity:write). Root cause this exists to fix
+-- (2026-09-24): with no such flag, the description-drain's "least-recently-
+-- attempted" candidate picker (pickNextDrainCandidate, description-chain.ts)
+-- kept re-selecting a scope-blocked account every rotation — it always
+-- looks most-overdue immediately after its own guaranteed failure touches
+-- its last-attempted timestamp — burning nearly every drain call
+-- re-confirming the same permanent error instead of ever reaching backlog
+-- that could actually be written. Also drives a dashboard banner prompting
+-- reconnection, since the account owner has no other way to notice this.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS needs_reauth BOOLEAN NOT NULL DEFAULT FALSE;
+
 -- ── deleted_users (2026-09-30) ────────────────────────────────
 -- Records every strava_id whose account has ever been deleted — via the
 -- self-service /api/account/delete route, or trial-lifecycle.ts's 14-day

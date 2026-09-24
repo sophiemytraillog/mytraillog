@@ -121,6 +121,15 @@ export async function GET(request: NextRequest) {
       strava_token_expires_at = EXCLUDED.strava_token_expires_at,
       strava_scope            = EXCLUDED.strava_scope,
       measurement_preference  = EXCLUDED.measurement_preference,
+      -- Cleared on every reconnect, unlike the trial fields above — this
+      -- OAuth flow always requests activity:write (see the scope list in
+      -- /api/auth/strava), so a successful reconnect is exactly the action
+      -- that fixes whatever set this flag in the first place (see
+      -- schema.sql's needs_reauth comment). If Strava still didn't actually
+      -- grant it, the next write attempt re-flags it immediately — no
+      -- worse than leaving it set and waiting indefinitely for a reconnect
+      -- that already happened.
+      needs_reauth             = FALSE,
       updated_at              = NOW()
     RETURNING id`;
   const upsertUserParams = [
