@@ -1,4 +1,8 @@
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import ConnectStrava from "./ConnectStrava";
+
+export const dynamic = "force-dynamic";
 
 const steps = [
   {
@@ -135,6 +139,25 @@ export default function Home({
 }: {
   searchParams?: { error?: string; deleted?: string };
 }) {
+  // Root cause of "I keep having to reconnect every visit" (2026-09-24,
+  // investigated as a cookie-persistence bug but wasn't one — a direct
+  // request carrying a valid strava_user_id cookie against /dashboard
+  // returned 200 every time, confirming the session itself was fine): this
+  // page never checked for an existing session at all, so ANY visit to the
+  // bare domain — including a perfectly-logged-in user reopening their
+  // browser and typing/bookmarking mytraillog.com — landed on this same
+  // marketing page with only a "Connect with Strava" CTA, indistinguishable
+  // from actually being logged out. A returning user reasonably concluded
+  // they'd been signed out and reconnected needlessly, generating a fresh
+  // OAuth flow (and its own state-cookie churn) every time. Deliberately
+  // just a cookie-presence check, not a DB round trip: /dashboard already
+  // re-verifies everything from the DB and redirects further (to
+  // /activate or /subscribe) as needed, so there's nothing to duplicate
+  // here — this only needs to decide "does a session cookie exist at all".
+  if (cookies().get("strava_user_id")?.value) {
+    redirect("/dashboard");
+  }
+
   return (
     <>
     <div className="min-h-dvh flex flex-col">
