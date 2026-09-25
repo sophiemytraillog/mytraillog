@@ -635,8 +635,8 @@ export default function DashboardClient({
                 <p className="text-[#8A7F72] text-[10px] font-semibold tracking-widest uppercase mb-1.5">
                   Activity Settings
                 </p>
-                <div className="flex flex-wrap items-start gap-x-5 gap-y-2">
-                  <div className="min-w-[160px] flex-1">
+                <div className="flex flex-col gap-2">
+                  <div>
                     <ToggleRow
                       label="Include cycle rides"
                       description={!basicAccess ? "Subscribe to unlock" : undefined}
@@ -648,7 +648,7 @@ export default function DashboardClient({
                       <p className="text-[#8A7F72] text-[10px] mt-1">{backfillStatus}</p>
                     )}
                   </div>
-                  <div className="flex items-center justify-between gap-2 min-w-[140px]">
+                  <div className="flex items-center justify-between gap-2">
                     <p className="text-xs font-medium text-[#2C2520]">Distance units</p>
                     <div className="flex gap-1 bg-[#EAE4DA] rounded-lg p-0.5">
                       {(["km", "mi"] as const).map((u) => (
