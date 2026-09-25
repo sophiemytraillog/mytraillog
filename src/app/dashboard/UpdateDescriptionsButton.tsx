@@ -104,13 +104,13 @@ export default function UpdateDescriptionsButton({ hasPremiumAccess }: { hasPrem
   }
 
   return (
-    <div className="mt-3">
+    <div className="mt-1.5">
       {phase === "idle" && (
         <button
           onClick={() => start()}
-          className="w-full text-xs font-medium text-[#8A7F72] hover:text-[#2C2520] border border-[#E5DED4] rounded-lg px-3 py-2 transition-colors hover:border-[#C4652A]/30 text-left"
+          className="text-[#8A7F72] hover:text-[#2C2520] text-[10px] font-medium underline underline-offset-2 transition-colors"
         >
-          Update historical activity descriptions…
+          Update historical activity descriptions
         </button>
       )}
 

@@ -16,6 +16,7 @@ export default function SyncButton({
   initialActivityCount,
   onSyncComplete,
   hasBasicAccess,
+  compact = false,
 }: {
   autoSync: boolean;
   initialActivityCount: number;
@@ -26,6 +27,13 @@ export default function SyncButton({
   // button from ever starting a sync doomed to come back as an error, and
   // shows the locked-state messaging up front instead.
   hasBasicAccess: boolean;
+  // Renders a single inline text trigger/status ("Sync now" and friends)
+  // instead of the full block below — 2026-09-24 settings-panel tidy-up,
+  // since manual sync is rarely needed once auto-sync is doing its job.
+  // Only affects the settings-panel usage; the first-sync banner
+  // (DashboardClient's FirstSyncBanner) still wants the full, prominent
+  // version below, since showing real progress IS the point there.
+  compact?: boolean;
 }) {
   const router = useRouter();
   const [syncState, setSyncState] = useState<SyncState>("idle");
@@ -139,6 +147,71 @@ export default function SyncButton({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSync, hasBasicAccess]);
+
+  if (compact) {
+    if (syncState === "syncing") {
+      return (
+        <span className="inline-flex items-center gap-1.5 text-[#4A7C59] text-xs">
+          <svg className="w-3 h-3 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+          {data.message || "Syncing…"}
+          <button
+            onClick={() => {
+              esRef.current?.close();
+              setSyncState("idle");
+              setData({ fetched: 0, saved: 0, message: "" });
+            }}
+            className="text-[#8A7F72] hover:text-[#2C2520] underline underline-offset-2 transition-colors"
+          >
+            Stop
+          </button>
+        </span>
+      );
+    }
+    if (syncState === "background") {
+      return (
+        <span className="inline-flex items-center gap-1.5 text-[#4A7C59] text-xs">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3 h-3">
+            <path fillRule="evenodd" d="M4.755 10.059a7.5 7.5 0 0112.548-3.364l1.903 1.903h-3.183a.75.75 0 100 1.5h4.992a.75.75 0 00.75-.75V4.356a.75.75 0 00-1.5 0v3.18l-1.9-1.9A9 9 0 003.306 9.67a.75.75 0 101.45.388zm15.408 3.352a.75.75 0 00-.919.53 7.5 7.5 0 01-12.548 3.364l-1.902-1.903h3.183a.75.75 0 000-1.5H2.984a.75.75 0 00-.75.75v4.992a.75.75 0 001.5 0v-3.18l1.9 1.9a9 9 0 0015.059-4.035.75.75 0 00-.53-.918z" clipRule="evenodd" />
+          </svg>
+          Syncing in the background
+          <button
+            onClick={() => router.refresh()}
+            className="text-[#8A7F72] hover:text-[#2C2520] underline underline-offset-2 transition-colors"
+          >
+            Refresh
+          </button>
+        </span>
+      );
+    }
+    if (syncState === "error") {
+      return (
+        <span className="text-red-500 text-xs">
+          {data.message}{" "}
+          <button onClick={startSync} className="underline underline-offset-2 hover:no-underline">
+            Retry
+          </button>
+        </span>
+      );
+    }
+    if (!hasBasicAccess) {
+      return (
+        <span className="text-[#C4652A] text-xs" title="Your trial has ended - subscribe to resume syncing">
+          Sync paused
+        </span>
+      );
+    }
+    return (
+      <button
+        onClick={startSync}
+        className="text-[#C4652A]/70 hover:text-[#C4652A] text-xs font-medium underline underline-offset-2 transition-colors"
+      >
+        Sync now
+      </button>
+    );
+  }
 
   return (
     <div className="mt-6 w-full">

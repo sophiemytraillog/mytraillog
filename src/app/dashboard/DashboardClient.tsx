@@ -148,6 +148,49 @@ function NeedsReauthBanner() {
   );
 }
 
+// Shared compact toggle row for the settings panel (2026-09-24 tidy-up) —
+// label + switch on one line, one short optional caption below, instead of
+// each setting's own multi-line block. Used for both the description-
+// updates and cycling toggles, which previously duplicated this markup.
+function ToggleRow({
+  label, description, checked, disabled, onChange,
+}: {
+  label: string;
+  description?: string;
+  checked: boolean;
+  disabled: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="flex items-center justify-between gap-3 cursor-pointer group">
+      <div className="min-w-0">
+        <p className="text-xs font-medium text-[#2C2520] leading-tight">{label}</p>
+        {description && (
+          <p className="text-[#8A7F72]/70 text-[10px] mt-0.5 leading-tight">{description}</p>
+        )}
+      </div>
+      <div className="relative shrink-0">
+        <input
+          type="checkbox"
+          className="sr-only"
+          checked={checked}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.checked)}
+        />
+        <div className={`w-8 h-4.5 rounded-full transition-colors ${
+          checked ? "bg-[#4A7C59]" : "bg-[#E5DED4]"
+        } ${disabled ? "opacity-50" : ""}`}
+          style={{ height: "18px" }}
+        >
+          <div className={`absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white shadow transition-transform ${
+            checked ? "translate-x-4" : "translate-x-0.5"
+          }`} />
+        </div>
+      </div>
+    </label>
+  );
+}
+
 // Shown in place of the normal dashboard while a new account is still
 // catching up (see showFirstSyncBanner's gating in page.tsx) — a first-time
 // visitor otherwise lands on an empty-looking trail list/map with nothing
@@ -476,18 +519,28 @@ export default function DashboardClient({
           {/* LEFT column (45%): welcome box + map stacked */}
           <div className="min-w-0 flex flex-col gap-4 lg:flex-[9]">
 
-            {/* Welcome box */}
-            <div className="bg-white border border-[#E5DED4] rounded-2xl px-5 py-4">
-              <div className="flex items-center gap-3 mb-3">
+            {/* Welcome box — compact settings panel, 2026-09-24 tidy-up.
+                Header (avatar/name/badges/last-synced/sync trigger), then
+                three sectioned groups (Strava Descriptions, Activity
+                Settings, Account) separated by subtle dividers, matching
+                the section-header style already used for the trail-list
+                columns elsewhere on this page (text-[10px] uppercase
+                tracking-widest). Padding and inter-row spacing throughout
+                are deliberately tight — this is a settings panel, not a
+                full page. */}
+            <div className="bg-white border border-[#E5DED4] rounded-2xl px-4 py-3.5">
+
+              {/* Header */}
+              <div className="flex items-center gap-2.5">
                 {athlete.profile && (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={athlete.profile}
                     alt={`${athlete.firstname}'s avatar`}
-                    className="w-10 h-10 rounded-full ring-2 ring-[#C4652A]/20 shrink-0"
+                    className="w-9 h-9 rounded-full ring-2 ring-[#C4652A]/20 shrink-0"
                   />
                 )}
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <h1 className="text-sm font-bold text-[#2C2520]">
                       Welcome, {athlete.firstname}!
@@ -504,15 +557,27 @@ export default function DashboardClient({
                       </span>
                     )}
                   </div>
-                  <p className="text-[#8A7F72] text-xs mt-0.5">{formatLastSynced(lastSyncedAt)}</p>
+                  {/* Last synced · activity count · Sync now — all on one
+                      line. Manual sync is rarely needed once auto-sync is
+                      running, so it's a small inline link here, not a
+                      full-width button (SyncButton's compact mode still
+                      swaps this line for a live spinner/"Refresh"/"Retry"
+                      whenever a sync is actually active). */}
+                  <p className="text-[#8A7F72] text-xs mt-0.5 flex items-center gap-1.5 flex-wrap">
+                    <span>{formatLastSynced(lastSyncedAt)}</span>
+                    {activityCount > 0 && <span>· {activityCount} activit{activityCount === 1 ? "y" : "ies"}</span>}
+                    <span>·</span>
+                    <SyncButton
+                      autoSync={autoSync}
+                      initialActivityCount={activityCount}
+                      onSyncComplete={() => setLastSyncedAt(new Date())}
+                      hasBasicAccess={basicAccess}
+                      compact
+                    />
+                  </p>
                 </div>
               </div>
-              <SyncButton
-                autoSync={autoSync}
-                initialActivityCount={activityCount}
-                onSyncComplete={() => setLastSyncedAt(new Date())}
-                hasBasicAccess={basicAccess}
-              />
+
               {/* Remounts (fresh initialChecked/initialTotal from the server)
                   every time a sync finishes, so it always picks up from
                   wherever that sync's own inline matching just left off. */}
@@ -522,176 +587,130 @@ export default function DashboardClient({
                 initialTotal={matchProgress.totalTrails}
               />
 
-              {/* Description updates setting */}
-              <div className="mt-3 pt-3 border-t border-[#E5DED4]">
-                <label className="flex items-start gap-2.5 cursor-pointer group">
-                  <div className="relative mt-0.5 shrink-0">
-                    <input
-                      type="checkbox"
-                      className="sr-only"
-                      checked={descUpdates}
-                      disabled={savingPref}
-                      onChange={(e) => toggleDescriptionUpdates(e.target.checked)}
-                    />
-                    <div className={`w-8 h-4.5 rounded-full transition-colors ${
-                      descUpdates ? "bg-[#4A7C59]" : "bg-[#E5DED4]"
-                    } ${savingPref ? "opacity-50" : ""}`}
-                      style={{ height: "18px" }}
-                    >
-                      <div className={`absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white shadow transition-transform ${
-                        descUpdates ? "translate-x-4" : "translate-x-0.5"
-                      }`} />
-                    </div>
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-xs font-medium text-[#2C2520] leading-tight">
-                      Add trail info to Strava descriptions
-                    </p>
-                    <p className="text-[#8A7F72]/70 text-[10px] mt-0.5 leading-relaxed">
-                      Appends matched trail progress to new activity descriptions.
-                    </p>
-                    {descUpdates && !hasWriteScope && (
-                      <p className="text-[#C4652A] text-[10px] mt-1">
-                        Requires activity:write -{" "}
-                        <a href="/api/auth/strava" className="underline hover:no-underline">
-                          reconnect Strava
-                        </a>
-                      </p>
-                    )}
-                  </div>
-                </label>
-
-                {descUpdates && (
-                  <div className="mt-2 pl-[calc(2rem+0.625rem)]">
-                    <select
-                      value={descMode}
-                      disabled={savingMode}
-                      onChange={(e) => changeDescriptionMode(e.target.value as DescriptionMode)}
-                      className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-[#E5DED4] bg-white text-[#2C2520] focus:outline-none focus:ring-2 focus:ring-[#C4652A]/40 disabled:opacity-50"
-                    >
-                      <option value="full">Full detail</option>
-                      <option value="new_only">New trail only</option>
-                      <option value="new_with_totals">New trail + totals</option>
-                    </select>
-                    <p className="text-[#8A7F72]/60 text-[10px] mt-1 leading-relaxed">
-                      {descMode === "full" && "Writes trail progress on every matched activity, even with no new ground."}
-                      {descMode === "new_only" && "Only writes when an activity covers new trail ground - just the new distance."}
-                      {descMode === "new_with_totals" && "Only writes when an activity covers new trail ground, with totals included."}
-                    </p>
-                  </div>
+              {/* Strava Descriptions */}
+              <div className="mt-3 pt-2.5 border-t border-[#E5DED4]">
+                <p className="text-[#8A7F72] text-[10px] font-semibold tracking-widest uppercase mb-1.5">
+                  Strava Descriptions
+                </p>
+                <ToggleRow
+                  label="Add trail info to descriptions"
+                  description="Appends matched trail progress to new activities"
+                  checked={descUpdates}
+                  disabled={savingPref}
+                  onChange={toggleDescriptionUpdates}
+                />
+                {descUpdates && !hasWriteScope && (
+                  <p className="text-[#C4652A] text-[10px] mt-1">
+                    Requires activity:write -{" "}
+                    <a href="/api/auth/strava" className="underline hover:no-underline">
+                      reconnect Strava
+                    </a>
+                  </p>
                 )}
-
+                {descUpdates && (
+                  <select
+                    value={descMode}
+                    disabled={savingMode}
+                    onChange={(e) => changeDescriptionMode(e.target.value as DescriptionMode)}
+                    title={
+                      descMode === "full"
+                        ? "Writes trail progress on every matched activity, even with no new ground."
+                        : descMode === "new_only"
+                        ? "Only writes when an activity covers new trail ground - just the new distance."
+                        : "Only writes when an activity covers new trail ground, with totals included."
+                    }
+                    className="mt-1.5 w-full text-xs px-2.5 py-1.5 rounded-lg border border-[#E5DED4] bg-white text-[#2C2520] focus:outline-none focus:ring-2 focus:ring-[#C4652A]/40 disabled:opacity-50"
+                  >
+                    <option value="full">Full detail</option>
+                    <option value="new_only">New trail only</option>
+                    <option value="new_with_totals">New trail + totals</option>
+                  </select>
+                )}
                 <UpdateDescriptionsButton hasPremiumAccess={premiumAccess} />
               </div>
 
-              {/* Cycling activities setting */}
-              <div className="mt-3 pt-3 border-t border-[#E5DED4]">
-                <label className="flex items-start gap-2.5 cursor-pointer group">
-                  <div className="relative mt-0.5 shrink-0">
-                    <input
-                      type="checkbox"
-                      className="sr-only"
+              {/* Activity Settings — side by side where there's room,
+                  stacked on narrow/mobile widths via flex-wrap. */}
+              <div className="mt-3 pt-2.5 border-t border-[#E5DED4]">
+                <p className="text-[#8A7F72] text-[10px] font-semibold tracking-widest uppercase mb-1.5">
+                  Activity Settings
+                </p>
+                <div className="flex flex-wrap items-start gap-x-5 gap-y-2">
+                  <div className="min-w-[160px] flex-1">
+                    <ToggleRow
+                      label="Include cycle rides"
+                      description={!basicAccess ? "Subscribe to unlock" : undefined}
                       checked={cyclingEnabled}
                       disabled={savingCycling || !basicAccess}
-                      onChange={(e) => toggleCyclingActivities(e.target.checked)}
+                      onChange={toggleCyclingActivities}
                     />
-                    <div className={`w-8 rounded-full transition-colors ${
-                      cyclingEnabled ? "bg-[#4A7C59]" : "bg-[#E5DED4]"
-                    } ${savingCycling || !basicAccess ? "opacity-50" : ""}`}
-                      style={{ height: "18px" }}
-                    >
-                      <div className={`absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white shadow transition-transform ${
-                        cyclingEnabled ? "translate-x-4" : "translate-x-0.5"
-                      }`} />
-                    </div>
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-xs font-medium text-[#2C2520] leading-tight">
-                      Include cycle rides
-                    </p>
-                    <p className="text-[#8A7F72]/70 text-[10px] mt-0.5 leading-relaxed">
-                      Match Ride, Gravel Ride, and Mountain Bike activities against trails.
-                    </p>
-                    {!basicAccess && (
-                      <p className="text-[#C4652A] text-[10px] mt-0.5 font-medium">
-                        Subscribe to unlock
-                      </p>
+                    {backfillStatus && (
+                      <p className="text-[#8A7F72] text-[10px] mt-1">{backfillStatus}</p>
                     )}
                   </div>
-                </label>
-                {backfillStatus && (
-                  <p className="text-[#8A7F72] text-[10px] mt-2 pl-[calc(2rem+0.625rem)]">
-                    {backfillStatus}
-                  </p>
-                )}
-              </div>
-
-              {/* Distance unit setting */}
-              <div className="mt-3 pt-3 border-t border-[#E5DED4] flex items-center justify-between">
-                <p className="text-xs font-medium text-[#2C2520]">Distance units</p>
-                <div className="flex gap-1 bg-[#EAE4DA] rounded-lg p-0.5">
-                  {(["km", "mi"] as const).map((u) => (
-                    <button
-                      key={u}
-                      onClick={() => setUnit(u)}
-                      className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
-                        unit === u
-                          ? "bg-white text-[#2C2520] shadow-sm"
-                          : "text-[#8A7F72] hover:text-[#2C2520]"
-                      }`}
-                    >
-                      {u}
-                    </button>
-                  ))}
+                  <div className="flex items-center justify-between gap-2 min-w-[140px]">
+                    <p className="text-xs font-medium text-[#2C2520]">Distance units</p>
+                    <div className="flex gap-1 bg-[#EAE4DA] rounded-lg p-0.5">
+                      {(["km", "mi"] as const).map((u) => (
+                        <button
+                          key={u}
+                          onClick={() => setUnit(u)}
+                          className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+                            unit === u
+                              ? "bg-white text-[#2C2520] shadow-sm"
+                              : "text-[#8A7F72] hover:text-[#2C2520]"
+                          }`}
+                        >
+                          {u}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              {/* Contact email — used for trial reminder/expiry notices
-                  only (see trial-lifecycle.ts); Strava never gives us an
-                  athlete's email. Same field the pre-dashboard /activate
-                  gate collects; this is just where to update it later. */}
-              <div className="mt-3 pt-3 border-t border-[#E5DED4]">
-                <form onSubmit={saveContactEmail} className="flex flex-col gap-1.5">
-                  <label htmlFor="contact-email-setting" className="text-xs font-medium text-[#2C2520]">
+              {/* Account */}
+              <div className="mt-3 pt-2.5 border-t border-[#E5DED4]">
+                <p className="text-[#8A7F72] text-[10px] font-semibold tracking-widest uppercase mb-1.5">
+                  Account
+                </p>
+                {/* Contact email — used for trial reminder/expiry notices
+                    only (see trial-lifecycle.ts); Strava never gives us an
+                    athlete's email. Same field the pre-dashboard /activate
+                    gate collects; this is just where to update it later. */}
+                <form onSubmit={saveContactEmail} className="flex gap-1.5">
+                  <label htmlFor="contact-email-setting" className="sr-only">
                     Contact email
                   </label>
-                  <div className="flex gap-1.5">
-                    <input
-                      id="contact-email-setting"
-                      type="email"
-                      value={email}
-                      onChange={(e) => {
-                        setEmail(e.target.value);
-                        setEmailStatus("idle");
-                      }}
-                      placeholder="you@example.com"
-                      className="flex-1 min-w-0 text-xs px-2.5 py-1.5 rounded-lg border border-[#E5DED4] bg-white text-[#2C2520] focus:outline-none focus:ring-2 focus:ring-[#C4652A]/40 disabled:opacity-50"
-                    />
-                    <button
-                      type="submit"
-                      disabled={savingEmail}
-                      className="shrink-0 px-3 py-1.5 rounded-lg bg-[#2C2520] text-white text-xs font-medium hover:bg-[#2C2520]/90 transition-colors disabled:opacity-50"
-                    >
-                      {savingEmail ? "Saving…" : "Save"}
-                    </button>
-                  </div>
-                  <p className="text-[#8A7F72]/70 text-[10px] leading-relaxed">
-                    We&apos;ll only use this for account notifications - no spam.
-                  </p>
-                  {emailStatus === "saved" && <p className="text-[#4A7C59] text-[10px]">Saved.</p>}
-                  {emailStatus === "error" && (
-                    <p className="text-[#C4652A] text-[10px]">Please enter a valid email address.</p>
-                  )}
+                  <input
+                    id="contact-email-setting"
+                    type="email"
+                    value={email}
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      setEmailStatus("idle");
+                    }}
+                    placeholder="you@example.com"
+                    className="flex-1 min-w-0 text-xs px-2.5 py-1.5 rounded-lg border border-[#E5DED4] bg-white text-[#2C2520] focus:outline-none focus:ring-2 focus:ring-[#C4652A]/40 disabled:opacity-50"
+                  />
+                  <button
+                    type="submit"
+                    disabled={savingEmail}
+                    className="shrink-0 px-3 py-1.5 rounded-lg bg-[#2C2520] text-white text-xs font-medium hover:bg-[#2C2520]/90 transition-colors disabled:opacity-50"
+                  >
+                    {savingEmail ? "Saving…" : "Save"}
+                  </button>
                 </form>
-              </div>
+                {emailStatus === "saved" && <p className="text-[#4A7C59] text-[10px] mt-1">Saved.</p>}
+                {emailStatus === "error" && (
+                  <p className="text-[#C4652A] text-[10px] mt-1">Please enter a valid email address.</p>
+                )}
 
-              {/* Account deletion — deliberately understated: red text only,
-                  no button chrome, tucked below everything else so it isn't
-                  the visual focus of the settings card. */}
-              <div className="mt-3 pt-3 border-t border-[#E5DED4]">
+                {/* Deliberately understated: red text only, no button
+                    chrome, so it isn't the visual focus of the panel. */}
                 <button
                   onClick={() => setShowDeleteModal(true)}
-                  className="text-[#C4652A]/70 hover:text-[#C4652A] text-[10px] transition-colors"
+                  className="block mt-2 text-[#C4652A]/70 hover:text-[#C4652A] text-[10px] transition-colors"
                 >
                   Disconnect &amp; Delete My Data
                 </button>
