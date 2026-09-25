@@ -14,7 +14,7 @@ export const ALL_TRACKED_ACTIVITY_TYPES = new Set([
 
 // ── Token management ─────────────────────────────────────────────────────────
 
-export async function getValidAccessToken(userId: string): Promise<string> {
+export async function getValidAccessToken(userId: string, forceRefresh = false): Promise<string> {
   const { rows } = await query<{
     strava_access_token: string;
     strava_refresh_token: string;
@@ -30,8 +30,14 @@ export async function getValidAccessToken(userId: string): Promise<string> {
   const { strava_access_token, strava_refresh_token, strava_token_expires_at } =
     rows[0];
 
-  // Still valid for more than 5 minutes — use as-is
-  if (new Date(strava_token_expires_at).getTime() > Date.now() + 5 * 60_000) {
+  // Still valid for more than 5 minutes — use as-is, UNLESS the caller
+  // explicitly wants a guaranteed-fresh one regardless (2026-09-25):
+  // trail-descriptions.ts's fetchStravaWithReauthRetry passes forceRefresh
+  // after a 401/403, to rule out a stale-token race (two concurrent
+  // description writes both reading the same soon-to-expire token, one
+  // refreshing it and invalidating the other's copy mid-flight) before
+  // concluding the grant itself is actually gone.
+  if (!forceRefresh && new Date(strava_token_expires_at).getTime() > Date.now() + 5 * 60_000) {
     return strava_access_token;
   }
 

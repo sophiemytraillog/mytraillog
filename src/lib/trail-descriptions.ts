@@ -85,6 +85,44 @@ async function fetchStrava(url: string, options: RequestInit): Promise<Response>
   return res;
 }
 
+// Wraps a Strava activity GET/PUT call with a single retry-on-401/403
+// against a GUARANTEED-fresh token before concluding the activity:write
+// grant is actually gone (2026-09-25). Root cause this exists to fix:
+// needs_reauth was being set — and the dashboard's reconnect banner shown —
+// on the very first 401/403, but a live test right after one such flag
+// (Sophie Davis) found a fresh token worked immediately, meaning the
+// original failure was a transient token-refresh race (two concurrent
+// description writes both reading the same soon-to-expire token, one
+// refreshing and invalidating the other's copy mid-flight), not a
+// genuinely revoked grant. Only a SECOND failure, after forcing a brand
+// new token via getValidAccessToken's forceRefresh, is treated as real —
+// a single transient 401 shouldn't show anyone a scary reconnect prompt.
+// `buildOptions` rebuilds the request per-attempt (not a fixed options
+// object) since the Authorization header must carry whichever token that
+// attempt is actually using.
+async function fetchStravaWithReauthRetry(
+  userId: string,
+  url: string,
+  buildOptions: (token: string) => RequestInit,
+  currentToken: string,
+  dbPool: Pool,
+  rateLimiter?: { waitForSlot(): Promise<void> }
+): Promise<Response> {
+  const res = await fetchStrava(url, buildOptions(currentToken));
+  if (res.status !== 401 && res.status !== 403) return res;
+
+  console.warn(
+    `[trail-descriptions] Got HTTP ${res.status} for user ${userId} — retrying once with a forced-fresh token before flagging needs_reauth`
+  );
+  const freshToken = await getValidAccessToken(userId, true);
+  if (rateLimiter) await rateLimiter.waitForSlot();
+  const retryRes = await fetchStrava(url, buildOptions(freshToken));
+  if (retryRes.status === 401 || retryRes.status === 403) {
+    await flagNeedsReauth(userId, dbPool);
+  }
+  return retryRes;
+}
+
 const BUFFER_METRES = 50;
 
 // Same bbox-pre-filter trick already established in match-trails.ts (see
@@ -390,13 +428,16 @@ export async function writeTrailDescription(
   // 0m under the NEW_GROUND_THRESHOLD_M fix still carried a full trail
   // block, because nothing ever re-checked it once written).
   if (rateLimiter) await rateLimiter.waitForSlot();
-  const getRes = await fetchStrava(
+  const getRes = await fetchStravaWithReauthRetry(
+    userId,
     `https://www.strava.com/api/v3/activities/${stravaActivityId}`,
-    { headers: { Authorization: `Bearer ${token}` } }
+    (t) => ({ headers: { Authorization: `Bearer ${t}` } }),
+    token,
+    dbPool,
+    rateLimiter
   );
   if (!getRes.ok) {
     if (getRes.status === 403 || getRes.status === 401) {
-      await flagNeedsReauth(userId, dbPool);
       throw new ScopeError(
         `Strava returned ${getRes.status} - reconnect your account to grant activity:write permission.`
       );
@@ -459,20 +500,23 @@ export async function writeTrailDescription(
   }
 
   if (rateLimiter) await rateLimiter.waitForSlot();
-  const putRes = await fetchStrava(
+  const putRes = await fetchStravaWithReauthRetry(
+    userId,
     `https://www.strava.com/api/v3/activities/${stravaActivityId}`,
-    {
+    (t) => ({
       method: "PUT",
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${t}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ description: newDesc }),
-    }
+    }),
+    token,
+    dbPool,
+    rateLimiter
   );
   if (!putRes.ok) {
     if (putRes.status === 403 || putRes.status === 401) {
-      await flagNeedsReauth(userId, dbPool);
       throw new ScopeError(
         `Strava returned ${putRes.status} - reconnect your account to grant activity:write permission.`
       );
