@@ -174,6 +174,21 @@ const MAX_DRAIN_HOPS = 400;
 // smoothly on its own turns.
 const TEMPORARILY_DEPRIORITIZED_USER_ID = "5116460b-94f7-476f-957c-8678b73778af"; // Paul Crowe
 
+// Temporary full EXCLUSION, not just deprioritization, 2026-09-28: unlike
+// Paul Crowe above, Sophie Davis's account genuinely has working
+// activity:write access (confirmed via repeated live GET+PUT tests against
+// a freshly-forced token — see trail-descriptions.ts's
+// fetchStravaWithReauthRetry) but kept getting needs_reauth flagged anyway
+// by a rare, intermittent 401/403 that slipped past even the retry-with-
+// fresh-token logic. The retry was just widened from one attempt to two
+// with a delay (same date) specifically to catch this, but isn't yet
+// confirmed working in production — excluding her account from the drain
+// entirely in the meantime stops the flag (and the dashboard's scary
+// reconnect banner) from recurring while that confirmation is pending.
+// Remove once a few days of drain activity confirm the widened retry
+// actually absorbs the blip instead of needing this crutch.
+const TEMPORARILY_EXCLUDED_USER_ID = "2f0be392-d997-4225-8da4-1ce434d05f89"; // Sophie Davis
+
 // Least-recently-drained user first (own description_batch events as the
 // clock, NULLS FIRST so a user who's never had one goes first) — each hop
 // only gives one user their turn, so this naturally round-robins across
@@ -204,6 +219,7 @@ async function pickNextDrainCandidate(): Promise<{ id: string; first_name: strin
        -- ordering was making that worse by treating their own guaranteed
        -- failure as making them MORE overdue next round.
        AND NOT u.needs_reauth
+       AND u.id != $2
      ORDER BY
        (u.id = $1) ASC,
        COALESCE(
@@ -211,7 +227,7 @@ async function pickNextDrainCandidate(): Promise<{ id: string; first_name: strin
          '-infinity'
        ) ASC
      LIMIT 1`,
-    [TEMPORARILY_DEPRIORITIZED_USER_ID]
+    [TEMPORARILY_DEPRIORITIZED_USER_ID, TEMPORARILY_EXCLUDED_USER_ID]
   );
   return rows[0] ?? null;
 }

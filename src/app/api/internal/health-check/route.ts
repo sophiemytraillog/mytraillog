@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { pool } from "@/lib/db";
 import { sendNotificationEmail } from "@/lib/email";
 import { runTrialLifecycleCheck } from "@/lib/trial-lifecycle";
+import { CHAIN_DISPATCH_ORIGIN } from "@/lib/chain-origin";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -179,6 +180,47 @@ export async function GET(request: NextRequest) {
     issues.push(`Trial lifecycle check threw an error: ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  // 7. Fallback drain-batch call, 2026-09-28: the external scheduler
+  // (GitHub Actions on a 5-minute cron, see drain.yml) is the PRIMARY way
+  // descriptions/matching/stalled syncs get drained, but it's proven
+  // unreliable in practice — confirmed here going three full days without
+  // firing once, zero descriptions processed that whole time, with nothing
+  // in this app able to notice since nothing depends on GitHub Actions
+  // actually running. Vercel's own cron IS confirmed reliable (this route
+  // fires daily without fail), so piggybacking one drain-batch call onto
+  // it guarantees at least one batch a day gets processed even if BOTH
+  // GitHub Actions and any other external scheduler go quiet — not a
+  // replacement for the 5-minute cadence when it's working, just a floor
+  // under how bad it can get when it isn't. Best-effort: a failure here
+  // is logged and reported like any other issue, but never blocks the
+  // rest of this health check or its own email.
+  let drainResult: unknown = null;
+  try {
+    const ac = new AbortController();
+    // 40s, not drain-batch's own full 45s budget — this route's own checks
+    // above already spend some of the shared 60s Vercel ceiling, and even
+    // in the worst case where THIS function gets killed while still
+    // awaiting the response, drain-batch runs as its own separate
+    // invocation and keeps working server-side regardless — so a stricter
+    // timeout here only costs the health-check email's own visibility into
+    // the result, never the actual drain progress.
+    const timer = setTimeout(() => ac.abort(), 40_000);
+    const drainRes = await fetch(new URL("/api/internal/drain-batch", CHAIN_DISPATCH_ORIGIN), {
+      headers: cronSecret ? { Authorization: `Bearer ${cronSecret}` } : {},
+      signal: ac.signal,
+    }).finally(() => clearTimeout(timer));
+    if (!drainRes.ok) {
+      issues.push(`Fallback drain-batch call returned HTTP ${drainRes.status}`);
+    } else {
+      drainResult = await drainRes.json();
+      console.log("[internal/health-check] Fallback drain-batch result:", JSON.stringify(drainResult));
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    issues.push(`Fallback drain-batch call failed: ${message}`);
+    console.error("[internal/health-check] Fallback drain-batch call failed:", err);
+  }
+
   const healthy = issues.length === 0;
   console.log(`[internal/health-check] ${healthy ? "All clear" : `${issues.length} issue(s) found`}`);
 
@@ -194,5 +236,5 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  return NextResponse.json({ healthy, issueCount: issues.length, issues, trial: trialSummaryLines });
+  return NextResponse.json({ healthy, issueCount: issues.length, issues, trial: trialSummaryLines, drain: drainResult });
 }
