@@ -85,21 +85,29 @@ async function fetchStrava(url: string, options: RequestInit): Promise<Response>
   return res;
 }
 
-// Wraps a Strava activity GET/PUT call with a single retry-on-401/403
-// against a GUARANTEED-fresh token before concluding the activity:write
-// grant is actually gone (2026-09-25). Root cause this exists to fix:
-// needs_reauth was being set — and the dashboard's reconnect banner shown —
-// on the very first 401/403, but a live test right after one such flag
-// (Sophie Davis) found a fresh token worked immediately, meaning the
-// original failure was a transient token-refresh race (two concurrent
-// description writes both reading the same soon-to-expire token, one
-// refreshing and invalidating the other's copy mid-flight), not a
-// genuinely revoked grant. Only a SECOND failure, after forcing a brand
-// new token via getValidAccessToken's forceRefresh, is treated as real —
-// a single transient 401 shouldn't show anyone a scary reconnect prompt.
-// `buildOptions` rebuilds the request per-attempt (not a fixed options
-// object) since the Authorization header must carry whichever token that
-// attempt is actually using.
+// Wraps a Strava activity GET/PUT call with up to two retries-on-401/403,
+// each against a GUARANTEED-fresh token, before concluding the
+// activity:write grant is actually gone (2026-09-25, widened from one
+// retry to two 2026-09-28). Root cause this exists to fix: needs_reauth
+// was being set — and the dashboard's reconnect banner shown — on the very
+// first 401/403, but a live test right after one such flag (Sophie Davis)
+// found a fresh token worked immediately, meaning the original failure was
+// transient, not a genuinely revoked grant. A single retry helped but
+// wasn't enough — Sophie hit the SAME "flagged, then confirmed working
+// again on a live retest" pattern twice more (2026-09-26, 2026-09-28)
+// even with that retry in place, meaning whatever's transient here doesn't
+// always clear within one immediate re-attempt. REAUTH_RETRY_DELAY_MS
+// gives each retry a moment to let go of whatever the first blip was
+// (a token-refresh race settling, a brief Strava-side hiccup) rather than
+// hammering the same still-bad condition milliseconds later. Only a
+// failure on EVERY attempt — original plus both retries — is treated as a
+// real revoked grant; anything less shouldn't show anyone a scary
+// reconnect prompt. `buildOptions` rebuilds the request per-attempt (not a
+// fixed options object) since the Authorization header must carry
+// whichever token that attempt is actually using.
+const REAUTH_RETRY_ATTEMPTS = 2;
+const REAUTH_RETRY_DELAY_MS = 2_000;
+
 async function fetchStravaWithReauthRetry(
   userId: string,
   url: string,
@@ -108,19 +116,22 @@ async function fetchStravaWithReauthRetry(
   dbPool: Pool,
   rateLimiter?: { waitForSlot(): Promise<void> }
 ): Promise<Response> {
-  const res = await fetchStrava(url, buildOptions(currentToken));
+  let res = await fetchStrava(url, buildOptions(currentToken));
   if (res.status !== 401 && res.status !== 403) return res;
 
-  console.warn(
-    `[trail-descriptions] Got HTTP ${res.status} for user ${userId} — retrying once with a forced-fresh token before flagging needs_reauth`
-  );
-  const freshToken = await getValidAccessToken(userId, true);
-  if (rateLimiter) await rateLimiter.waitForSlot();
-  const retryRes = await fetchStrava(url, buildOptions(freshToken));
-  if (retryRes.status === 401 || retryRes.status === 403) {
-    await flagNeedsReauth(userId, dbPool);
+  for (let attempt = 1; attempt <= REAUTH_RETRY_ATTEMPTS; attempt++) {
+    console.warn(
+      `[trail-descriptions] Got HTTP ${res.status} for user ${userId} — retry ${attempt}/${REAUTH_RETRY_ATTEMPTS} with a forced-fresh token before flagging needs_reauth`
+    );
+    await new Promise<void>((r) => setTimeout(r, REAUTH_RETRY_DELAY_MS));
+    const freshToken = await getValidAccessToken(userId, true);
+    if (rateLimiter) await rateLimiter.waitForSlot();
+    res = await fetchStrava(url, buildOptions(freshToken));
+    if (res.status !== 401 && res.status !== 403) return res;
   }
-  return retryRes;
+
+  await flagNeedsReauth(userId, dbPool);
+  return res;
 }
 
 const BUFFER_METRES = 50;
