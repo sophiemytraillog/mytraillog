@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { runExternalDrainBatch } from "@/lib/description-chain";
 import { runExternalMatchDrainBatch } from "@/lib/match-chain";
 import { runExternalSyncResumeBatch } from "@/lib/sync-chain";
+import { runExternalDetailPolylineDrainBatch } from "@/lib/detail-polyline";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -69,9 +70,16 @@ export const maxDuration = 60;
 // ceiling instead of subdividing it further is exactly how the
 // FUNCTION_INVOCATION_TIMEOUT regression above happened in the first place;
 // a third phase gets a third slice of the same budget, not a bigger pie.
+// Detail-polyline drain added 2026-09-30 as a fourth phase, same carved-out-
+// of-the-same-envelope reasoning as sync-resume's own addition above (see
+// its comment) — this phase's call volume is low (only activities over
+// 50km ever queue for it) and low-priority relative to the other three, so
+// it goes last and simply gets skipped when nothing's left of the shared
+// budget rather than earning any dedicated slice.
 const TOTAL_REQUEST_BUDGET_MS = 45_000;
 const MIN_USEFUL_MATCH_BUDGET_MS = 3_000;
 const MIN_USEFUL_SYNC_RESUME_BUDGET_MS = 3_000;
+const MIN_USEFUL_DETAIL_POLYLINE_BUDGET_MS = 3_000;
 
 export async function GET(request: NextRequest) {
   const cronSecret = process.env.CRON_SECRET;
@@ -115,5 +123,17 @@ export async function GET(request: NextRequest) {
   }
 
   const syncResume = await runExternalSyncResumeBatch(remainingAfterMatching);
-  return NextResponse.json({ descriptions, matching, syncResume });
+
+  const remainingAfterSyncResume = TOTAL_REQUEST_BUDGET_MS - (Date.now() - startedAt);
+  if (remainingAfterSyncResume < MIN_USEFUL_DETAIL_POLYLINE_BUDGET_MS) {
+    return NextResponse.json({
+      descriptions,
+      matching,
+      syncResume,
+      detailPolyline: { skipped: true, reason: "insufficient time remaining after sync-resume phase" },
+    });
+  }
+
+  const detailPolyline = await runExternalDetailPolylineDrainBatch(remainingAfterSyncResume);
+  return NextResponse.json({ descriptions, matching, syncResume, detailPolyline });
 }

@@ -462,6 +462,53 @@ CREATE TABLE IF NOT EXISTS deleted_users (
   deleted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- ── Detail-polyline backfill (2026-09-30) ───────────────────
+-- Strava's summary_polyline (all `/athlete/activities` list-endpoint syncs
+-- get — see sync-engine.ts's savePage) is a fixed low point-budget encoding
+-- regardless of activity length — too coarse for accurate trail matching on
+-- a very long single activity. Root-caused investigating Luke Davis's
+-- Hadrian's Wall Path: a 170km/34hr walk (a multi-day thru-hike logged as
+-- one Strava entry) had a summary_polyline with only 156 points (~1/km)
+-- against the trail's own 2,328-point reference geometry — straight-line
+-- chords between such sparse points cut across nearly every bend, leaving
+-- 26% of the trail's real length outside the 50m match buffer despite him
+-- walking the whole route. The full-resolution `polyline` field (only
+-- returned by GET /activities/{id}, never the list endpoint) fixes this —
+-- see LONG_ACTIVITY_DISTANCE_M and fetchDetailPolyline in
+-- src/lib/detail-polyline.ts.
+--
+-- needs_detail_polyline is the work-queue flag (set TRUE at insert time for
+-- a new long activity, or by the one-off backfill UPDATE below for
+-- pre-existing ones); detail_polyline_fetched_at is the completion marker
+-- (set once an attempt has actually finished, success or permanent
+-- give-up) — kept as two separate columns, not one boolean, because a
+-- rerun of this migration needs to tell "already handled" apart from
+-- "never needed it" to avoid re-queueing completed activities every deploy
+-- (same reasoning as trail_match_checks existing alongside
+-- user_trail_progress elsewhere in this schema).
+ALTER TABLE activities ADD COLUMN IF NOT EXISTS needs_detail_polyline BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE activities ADD COLUMN IF NOT EXISTS detail_polyline_fetched_at TIMESTAMPTZ;
+-- Bounded-retry counter, same pattern as description_update_attempts above
+-- (give up after MAX_DETAIL_POLYLINE_ATTEMPTS in detail-polyline.ts rather
+-- than retrying a permanently-broken activity — e.g. deleted on Strava —
+-- forever).
+ALTER TABLE activities ADD COLUMN IF NOT EXISTS detail_polyline_attempts INTEGER NOT NULL DEFAULT 0;
+
+-- One-off backfill for activities that predate this feature. Guarded on
+-- detail_polyline_fetched_at IS NULL so re-running this idempotent
+-- migration (it runs on every deploy via `npm run db:migrate`) never
+-- re-queues an activity the backfill worker already finished.
+UPDATE activities
+SET needs_detail_polyline = TRUE
+WHERE distance >= 50000
+  AND geometry IS NOT NULL
+  AND detail_polyline_fetched_at IS NULL
+  AND needs_detail_polyline = FALSE;
+
+CREATE INDEX IF NOT EXISTS idx_activities_needs_detail_polyline
+  ON activities (user_id)
+  WHERE needs_detail_polyline = TRUE;
+
 -- ── Row-Level Security ──────────────────────────────────────
 -- The server connects as the postgres role which has BYPASSRLS in Supabase,
 -- so all server-side queries are unaffected. These settings block direct

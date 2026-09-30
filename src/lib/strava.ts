@@ -77,6 +77,15 @@ export async function getValidAccessToken(userId: string, forceRefresh = false):
   return tokens.access_token;
 }
 
+// Strava's summary_polyline (what every normal sync gets — see
+// sync-engine.ts's savePage) is a fixed low point-budget encoding
+// regardless of activity length, so the longer/more winding the route, the
+// coarser it gets per km. 50km is comfortably past where that starts
+// mattering for trail-matching accuracy — see detail-polyline.ts's doc
+// comment for the confirmed case (a 170km thru-hike whose summary_polyline
+// had only ~1 point per km) that established this needs fixing at all.
+export const LONG_ACTIVITY_DISTANCE_M = 50_000;
+
 // ── Geometry helpers ─────────────────────────────────────────────────────────
 
 /**

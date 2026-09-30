@@ -5,8 +5,10 @@ import {
   decodePolylineToWKT,
   selectPolyline,
   ALL_TRACKED_ACTIVITY_TYPES,
+  LONG_ACTIVITY_DISTANCE_M,
 } from "@/lib/strava";
 import { computeTrailProgress } from "@/lib/match-trails";
+import { applyDetailPolyline } from "@/lib/detail-polyline";
 import {
   getActivityTrailMatches,
   writeTrailDescription,
@@ -68,6 +70,21 @@ const MAX_TRAILS_PER_FINISH_SYNC = 40;
 
 const PER_PAGE = 30;
 const PAGE_DELAY_MS = 2000;
+
+// Strava's summary_polyline (all this function ever gets — see savePage
+// below) is too coarse for accurate trail matching on very long activities
+// — see detail-polyline.ts's doc comment for the confirmed case that
+// established this. Fetching the full-resolution detail endpoint for EVERY
+// long activity in a chunk inline would risk blowing runSyncChunk's own
+// tight per-hop time budget (CHAIN_TIME_BUDGET_MS in sync-chain.ts is as
+// low as 15s) on however many happen to land in one page — capped here so
+// at most a handful get the immediate treatment; anything beyond the cap
+// stays flagged needs_detail_polyline=TRUE for the background drain
+// (runExternalDetailPolylineDrainBatch) to pick up within a couple of
+// minutes instead, same eventually-consistent model as matching/
+// descriptions elsewhere in this pipeline.
+const MAX_INLINE_DETAIL_FETCHES_PER_CHUNK = 3;
+const INLINE_DETAIL_FETCH_DELAY_MS = 500;
 
 // Vercel Hobby plan hard-caps function duration at 60s — this can't be
 // raised without a plan upgrade. Default budget leaves margin for the final
@@ -165,6 +182,12 @@ export async function runSyncChunk(
   try {
     const accessToken = await getValidAccessToken(userId);
 
+    // Shared across every page of this whole chunk (forward AND backward
+    // pass), not reset per page — the cap is meant to bound THIS
+    // invocation's total inline-fetch time, which a per-page reset
+    // wouldn't do.
+    let inlineDetailFetchesThisChunk = 0;
+
     const savePage = async (activities: StravaActivity[]): Promise<number> => {
       let pageNew = 0;
       for (const activity of activities) {
@@ -181,21 +204,42 @@ export async function runSyncChunk(
             name: activity.name,
           });
         }
+        const isLong = activity.distance >= LONG_ACTIVITY_DISTANCE_M;
         const result = await dbPool.query<{ id: string }>(
           `INSERT INTO activities (
              user_id, strava_activity_id, name, activity_type,
-             distance, moving_time, start_date, polyline, geometry
+             distance, moving_time, start_date, polyline, geometry,
+             needs_detail_polyline
            ) VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz, $8,
-             ST_GeomFromText($9, 4326))
+             ST_GeomFromText($9, 4326), $10)
            ON CONFLICT (strava_activity_id) DO NOTHING
            RETURNING id`,
           [
             userId, activity.id, activity.name, type,
             activity.distance, activity.moving_time, activity.start_date,
-            rawPolyline, wkt,
+            rawPolyline, wkt, isLong,
           ]
         );
-        if ((result.rowCount ?? 0) > 0) { pageNew++; newDbIds.push(result.rows[0].id); }
+        if ((result.rowCount ?? 0) > 0) {
+          pageNew++;
+          newDbIds.push(result.rows[0].id);
+
+          // Best-effort, capped — see MAX_INLINE_DETAIL_FETCHES_PER_CHUNK's
+          // comment. A failure here is never fatal to the sync itself: the
+          // activity stays flagged needs_detail_polyline=TRUE (applyDetailPolyline
+          // only clears it on an outcome that means "nothing more to do
+          // here"), so the background drain picks up exactly where this
+          // left off.
+          if (isLong && inlineDetailFetchesThisChunk < MAX_INLINE_DETAIL_FETCHES_PER_CHUNK) {
+            inlineDetailFetchesThisChunk++;
+            if (inlineDetailFetchesThisChunk > 1) {
+              await new Promise<void>((r) => setTimeout(r, INLINE_DETAIL_FETCH_DELAY_MS));
+            }
+            await applyDetailPolyline(userId, result.rows[0].id, String(activity.id), dbPool).catch((err) => {
+              console.error(`[sync-engine] Inline detail-polyline fetch failed for activity ${activity.id}:`, err);
+            });
+          }
+        }
       }
       return pageNew;
     };
