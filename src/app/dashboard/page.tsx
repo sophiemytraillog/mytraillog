@@ -171,8 +171,9 @@ export default async function Dashboard({
            -- Full-resolution geometry for display: simplifying here (even
            -- via trails.simplified_geometry, which exists only for spatial
            -- query performance) cuts corners and makes trails look straight.
-           ST_AsGeoJSON(t.geometry)::json                                           AS trail_geojson,
-           ST_AsGeoJSON(utp.completed_geometry)::json                               AS completed_geojson,
+           -- Coordinates rounded to 5dp (~1m) to keep the payload small.
+           ST_AsGeoJSON(t.geometry, 5)::json                                           AS trail_geojson,
+           ST_AsGeoJSON(utp.completed_geometry, 5)::json                               AS completed_geojson,
            COALESCE(t.category, 'national_trail')                                   AS category
          FROM trails t
          LEFT JOIN user_trail_progress utp

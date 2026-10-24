@@ -52,13 +52,13 @@ export default async function TrailDetailPage({
     query<TrailDetail>(
       `SELECT
          t.id, t.name, t.slug, t.region, t.description, t.total_distance,
-         ST_AsGeoJSON(t.geometry)::json          AS trail_geojson,
+         ST_AsGeoJSON(t.geometry, 5)::json          AS trail_geojson,
          utp.completed_distance,
          utp.completion_percentage,
          utp.activity_count,
          utp.first_activity_date,
          utp.last_activity_date,
-         ST_AsGeoJSON(utp.completed_geometry)::json AS completed_geojson
+         ST_AsGeoJSON(utp.completed_geometry, 5)::json AS completed_geojson
        FROM trails t
        LEFT JOIN user_trail_progress utp
          ON utp.trail_id = t.id AND utp.user_id = $1
