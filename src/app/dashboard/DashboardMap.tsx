@@ -58,7 +58,7 @@ export default function DashboardMap({ trails, selectedSlug, onTrailClick }: Pro
     import("leaflet").then((L) => {
       if (!containerRef.current || mapRef.current) return;
 
-      const map = L.map(containerRef.current, { zoomControl: true, zoomAnimation: false, minZoom: 5 });
+      const map = L.map(containerRef.current, { zoomControl: true, zoomAnimation: false, minZoom: 5, zoomSnap: 0.25 });
       // Leaflet's own "Leaflet" branding link in the attribution control is a
       // default, not a license requirement (BSD-2-Clause has no on-map
       // attribution clause) — only the tile/data source credit in
@@ -68,9 +68,12 @@ export default function DashboardMap({ trails, selectedSlug, onTrailClick }: Pro
 
       L.tileLayer(TILE_URL, { attribution: TILE_ATTRIBUTION, maxZoom: 18 }).addTo(map);
 
-      // Fit to Great Britain — invalidateSize first so Leaflet knows the container dimensions
+      // Fit to Great Britain (south coast to northern Scotland, western Wales
+      // to eastern England) — invalidateSize first so Leaflet knows the
+      // container dimensions. zoomSnap 0.25 lets the fit land between whole
+      // zoom levels so GB fills the container instead of rounding down.
       map.invalidateSize();
-      map.fitBounds([[49.5, -8.0], [61.0, 2.0]]);
+      map.fitBounds([[49.9, -6.5], [58.7, 1.8]]);
 
       for (const trail of trails) {
         if (!trail.trail_geojson) continue;
