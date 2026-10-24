@@ -168,8 +168,11 @@ export default async function Dashboard({
              t.total_distance
            )                                                                         AS completed_distance,
            utp.activity_count,
-           ST_AsGeoJSON(ST_SimplifyPreserveTopology(t.geometry, 0.005))::json        AS trail_geojson,
-           ST_AsGeoJSON(ST_SimplifyPreserveTopology(utp.completed_geometry, 0.005))::json AS completed_geojson,
+           -- Full-resolution geometry for display: simplifying here (even
+           -- via trails.simplified_geometry, which exists only for spatial
+           -- query performance) cuts corners and makes trails look straight.
+           ST_AsGeoJSON(t.geometry)::json                                           AS trail_geojson,
+           ST_AsGeoJSON(utp.completed_geometry)::json                               AS completed_geojson,
            COALESCE(t.category, 'national_trail')                                   AS category
          FROM trails t
          LEFT JOIN user_trail_progress utp
