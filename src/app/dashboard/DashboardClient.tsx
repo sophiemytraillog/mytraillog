@@ -8,6 +8,7 @@ import TrailProgressList from "./TrailProgressList";
 import NationalTrailsList from "./NationalTrailsList";
 import UpdateDescriptionsButton from "./UpdateDescriptionsButton";
 import RequestTrailModal from "./RequestTrailModal";
+import SubscribeButton from "@/app/SubscribeButton";
 import DeleteAccountModal from "./DeleteAccountModal";
 import { useDistanceUnit } from "@/app/DistanceUnitProvider";
 import { formatDist, unitLabel } from "@/lib/distance";
@@ -69,6 +70,7 @@ interface Props {
   contactEmail: string | null;
   showFirstSyncBanner: boolean;
   needsReauth: boolean;
+  justSubscribed: boolean;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -76,9 +78,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // period runs 14 days from trial_ends_at, ending in account deletion.
 const GRACE_PERIOD_DAYS = 14;
 
-// No paywall yet (tracking + countdown only, until Stripe is wired up —
-// see schema.sql's 2026-09-02 trial-tracking comment) — this is purely
-// display. 'active' (founding testers, and future paid subscribers) shows
+// Purely display — the trial countdown pill. 'active' (founding testers, and future paid subscribers) shows
 // nothing at all. Only covers 'trial' — grace_period gets its own more
 // prominent banner (see GracePeriodBanner below) instead of this small pill.
 function formatTrialStatus(subscriptionStatus: SubscriptionStatus, trialEndsAt: Date | null): string | null {
@@ -115,12 +115,47 @@ function GracePeriodBanner({ trialEndsAt }: { trialEndsAt: Date | null }) {
           Your data will be removed in {days} {days === 1 ? "day" : "days"} if you don&apos;t subscribe.
         </span>
       </p>
-      <a
-        href="mailto:mytrailloguk@gmail.com?subject=Subscribe%20to%20My%20Trail%20Log"
-        className="shrink-0 px-4 py-2 rounded-lg bg-white text-[#C4652A] text-sm font-semibold hover:bg-white/90 transition-colors text-center"
-      >
-        Subscribe
-      </a>
+      <SubscribeButton
+        wrapperClassName="shrink-0"
+        className="px-4 py-2 rounded-lg bg-white text-[#C4652A] text-sm font-semibold hover:bg-white/90 transition-colors text-center"
+      />
+    </div>
+  );
+}
+
+// Shown once on Stripe Checkout's success_url (/dashboard?subscribed=true).
+// Strips the query param on mount so a refresh or bookmark doesn't keep
+// re-welcoming them; dismissing just hides it for this page view.
+function WelcomePremiumBanner() {
+  const [dismissed, setDismissed] = useState(false);
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("subscribed")) {
+      url.searchParams.delete("subscribed");
+      window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+    }
+  }, []);
+
+  if (dismissed) return null;
+  return (
+    <div className="px-4 pt-4 sm:px-6 sm:pt-6 max-w-7xl mx-auto w-full">
+      <div className="bg-[#4A7C59] text-white rounded-2xl px-5 py-4 flex items-start sm:items-center gap-3 sm:gap-4">
+        <p className="text-sm font-medium flex-1 leading-snug">
+          Welcome to Premium!
+          <span className="block sm:inline sm:before:content-['_·_'] opacity-90 font-normal">
+            Thanks for subscribing - all features are now unlocked.
+          </span>
+        </p>
+        <button
+          type="button"
+          onClick={() => setDismissed(true)}
+          aria-label="Dismiss"
+          className="shrink-0 text-white/80 hover:text-white text-lg leading-none px-1"
+        >
+          ×
+        </button>
+      </div>
     </div>
   );
 }
@@ -270,7 +305,7 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
 
 export default function DashboardClient({
   athlete, stats, trails, activityCount, autoSync, stravaDescriptionUpdates, descriptionMode, hasWriteScope, includeCycling, matchProgress,
-  subscriptionStatus, trialEndsAt, contactEmail, showFirstSyncBanner, needsReauth,
+  subscriptionStatus, trialEndsAt, contactEmail, showFirstSyncBanner, needsReauth, justSubscribed,
 }: Props) {
   const trialStatusText = formatTrialStatus(subscriptionStatus, trialEndsAt);
   // Feature-gating flags (2026-09-30 request) — basic covers sync/matching/
@@ -472,6 +507,10 @@ export default function DashboardClient({
         />
       </nav>
 
+      {/* Above both branches so a returning subscriber who lands on the
+          first-sync view still sees it. */}
+      {justSubscribed && <WelcomePremiumBanner />}
+
       {showFirstSyncBanner ? (
         <FirstSyncBanner
           autoSync={autoSync}
@@ -485,7 +524,10 @@ export default function DashboardClient({
       <div className="flex-1 px-4 py-4 sm:px-6 sm:py-6 max-w-7xl mx-auto w-full">
 
         {needsReauth && <NeedsReauthBanner />}
-        {subscriptionStatus === "grace_period" && <GracePeriodBanner trialEndsAt={trialEndsAt} />}
+        {/* Hidden on the post-checkout landing — the webhook may not have
+            flipped grace_period to active yet, and "subscribe" right after
+            paying would be confusing. */}
+        {subscriptionStatus === "grace_period" && !justSubscribed && <GracePeriodBanner trialEndsAt={trialEndsAt} />}
 
         {/* Stat row — National Trails + Other Trails */}
         <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:gap-4">

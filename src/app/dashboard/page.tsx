@@ -40,7 +40,7 @@ const STALE_SYNC_THRESHOLD_SECONDS = 60;
 export default async function Dashboard({
   searchParams,
 }: {
-  searchParams?: { autoSync?: string };
+  searchParams?: { autoSync?: string; subscribed?: string };
 }) {
   const cookieStore = cookies();
   const athleteCookie = cookieStore.get("strava_athlete");
@@ -50,6 +50,10 @@ export default async function Dashboard({
 
   const athlete: Athlete = JSON.parse(athleteCookie.value);
   const requestedAutoSync = searchParams?.autoSync === "true";
+  // Stripe Checkout's success_url (see /api/checkout) — shows the welcome
+  // banner. The webhook that actually flips subscription_status usually
+  // lands before this redirect does, but isn't guaranteed to.
+  const justSubscribed = searchParams?.subscribed === "true";
 
   let stats: UserStats | null = null;
   let stravaDescriptionUpdates = false;
@@ -132,7 +136,10 @@ export default async function Dashboard({
   // dashboard at all, not even a locked/read-only one — there's nothing to
   // show them since their old row is gone and this is a brand-new one.
   // Straight to /subscribe until they pay.
-  if (userId && subscriptionStatus === "expired") {
+  // Not on the post-checkout landing, though: if the webhook hasn't landed
+  // yet the row still reads 'expired', and bouncing a customer who just paid
+  // back to the paywall would look like the payment failed.
+  if (userId && subscriptionStatus === "expired" && !justSubscribed) {
     redirect("/subscribe");
   }
 
@@ -259,6 +266,7 @@ export default async function Dashboard({
       contactEmail={contactEmail}
       showFirstSyncBanner={showFirstSyncBanner}
       needsReauth={needsReauth}
+      justSubscribed={justSubscribed}
     />
   );
 }

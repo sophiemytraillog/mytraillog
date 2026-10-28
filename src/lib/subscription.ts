@@ -9,10 +9,11 @@
 
 // Single source of truth for what each subscription_status can do — see
 // schema.sql's trial-tracking comments for how these values get set.
-// 'expired' is kept in the type/CHECK constraint for forward compatibility
-// but shouldn't actually persist in practice: the 14-day grace_period cron
-// cleanup (trial-lifecycle.ts) deletes the account outright rather than
-// transitioning it to 'expired'.
+// 'expired' is set in two ways: a returning athlete whose earlier trial
+// account was deleted (strava/callback's deleted_users check), and a paid
+// subscription being cancelled (/api/webhook/stripe on
+// customer.subscription.deleted). The 14-day grace_period cron cleanup
+// (trial-lifecycle.ts) deletes accounts outright instead.
 export type SubscriptionStatus = "trial" | "active" | "expired" | "grace_period";
 
 // Trial and active (paid, or a founding beta tester) both get the "basic"

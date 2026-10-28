@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import SubscribeButton from "@/app/SubscribeButton";
 
 type SyncState = "idle" | "syncing" | "background" | "done" | "error";
 
@@ -319,13 +320,12 @@ export default function SyncButton({
 
       {/* Button */}
       {syncState !== "syncing" && syncState !== "background" && !hasBasicAccess && (
-        <button
-          disabled
-          title="Your trial has ended - subscribe to resume syncing"
-          className="w-full flex items-center justify-center gap-2 bg-[#C4652A]/5 border border-[#C4652A]/30 text-[#C4652A] text-sm font-medium py-2.5 px-4 rounded-xl cursor-not-allowed"
+        <SubscribeButton
+          wrapperClassName="w-full"
+          className="w-full flex items-center justify-center gap-2 bg-[#C4652A]/5 hover:bg-[#C4652A]/10 border border-[#C4652A]/30 text-[#C4652A] text-sm font-medium py-2.5 px-4 rounded-xl transition-colors"
         >
           Subscribe to keep tracking
-        </button>
+        </SubscribeButton>
       )}
       {syncState !== "syncing" && syncState !== "background" && hasBasicAccess && (
         <button

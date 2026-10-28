@@ -599,3 +599,17 @@ CREATE OR REPLACE TRIGGER trails_updated_at
 CREATE OR REPLACE TRIGGER progress_updated_at
   BEFORE UPDATE ON user_trail_progress
   FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+
+-- ── Stripe subscriptions (2026-10-28) ────────────────────────
+-- Set by /api/webhook/stripe on checkout.session.completed (alongside
+-- subscription_status = 'active'). stripe_subscription_id is how
+-- customer.subscription.deleted finds the user to mark 'expired', and
+-- stripe_customer_id is how invoice.payment_failed does. Both stay NULL for
+-- the founding beta testers, who are 'active' without ever paying.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_id     TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_users_stripe_customer_id
+  ON users (stripe_customer_id) WHERE stripe_customer_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_users_stripe_subscription_id
+  ON users (stripe_subscription_id) WHERE stripe_subscription_id IS NOT NULL;

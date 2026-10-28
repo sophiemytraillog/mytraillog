@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { query } from "@/lib/db";
+import SubscribeButton from "@/app/SubscribeButton";
 
 export const dynamic = "force-dynamic";
 
@@ -11,8 +12,8 @@ export const dynamic = "force-dynamic";
 // isn't "one field then through to the dashboard" — there's no dashboard to
 // go to until they actually pay. Re-checks independently (bookmark, back
 // button) in case subscription_status has since been flipped to 'active'
-// (see trial-lifecycle.ts's comment on why that's the whole re-subscribe
-// flow for now, no Stripe yet) — this page isn't meant to be a permanent trap.
+// (by /api/webhook/stripe once Checkout completes) — this page isn't meant
+// to be a permanent trap.
 export default async function SubscribePage() {
   const userId = cookies().get("strava_user_id")?.value;
   if (!userId) redirect("/");
@@ -34,12 +35,7 @@ export default async function SubscribePage() {
         <p className="text-[#8A7F72] text-sm mb-6 leading-relaxed">
           Subscribe for £12.99/year to continue tracking your trails.
         </p>
-        <a
-          href="mailto:mytrailloguk@gmail.com?subject=Subscribe%20to%20My%20Trail%20Log"
-          className="inline-block px-6 py-3 rounded-xl bg-[#C4652A] text-white font-semibold hover:bg-[#C4652A]/90 transition-colors"
-        >
-          Subscribe
-        </a>
+        <SubscribeButton className="inline-block px-6 py-3 rounded-xl bg-[#C4652A] text-white font-semibold hover:bg-[#C4652A]/90 transition-colors" />
         <p className="text-[#8A7F72]/60 text-xs mt-5 leading-relaxed">
           Your free trial has already been used on this Strava account, so this one starts straight
           into a subscription rather than another trial.
