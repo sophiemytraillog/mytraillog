@@ -33,7 +33,7 @@ export interface TrailRow {
   completion_percentage: number | null;
   completed_distance: number | null;
   activity_count: number | null;
-  trail_geojson: object;
+  trail_geojson: object | null; // NULL for trails the user hasn't started — not drawn on the map
   completed_geojson: object | null;
   category: string;
 }

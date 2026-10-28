@@ -29,7 +29,7 @@ function toLatLngRings(geom: GeoJsonGeom): [number, number][][] {
 export interface TrailGeoData {
   slug: string;
   name: string;
-  trail_geojson: object;
+  trail_geojson: object | null; // NULL for trails the user hasn't started — not drawn on the map
   completed_geojson: object | null;
 }
 

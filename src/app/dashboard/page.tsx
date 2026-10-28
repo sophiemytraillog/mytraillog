@@ -175,12 +175,18 @@ export default async function Dashboard({
              t.total_distance
            )                                                                         AS completed_distance,
            utp.activity_count,
-           -- Full-resolution geometry for display: simplifying here (even
-           -- via trails.simplified_geometry, which exists only for spatial
-           -- query performance) cuts corners and makes trails look straight.
-           -- Coordinates rounded to 5dp (~1m) to keep the payload small.
-           ST_AsGeoJSON(t.geometry, 5)::json                                           AS trail_geojson,
-           ST_AsGeoJSON(utp.completed_geometry, 5)::json                               AS completed_geojson,
+           -- Map geometry is only sent for trails the user has started —
+           -- drawing the whole 1,000+ trail catalog was what made the map
+           -- slow. Unstarted trails still come back (the trail list needs
+           -- them), just with trail_geojson NULL, which DashboardMap skips.
+           -- Simplified at 0.0005° (~50m; ~30m east-west at UK latitudes) —
+           -- enough to cut the payload while keeping real bends. The old
+           -- 0.005° (~500m) made trails look straight. Trail detail pages
+           -- use full geometry. Coordinates rounded to 5dp (~1m).
+           CASE WHEN COALESCE(utp.completed_distance, 0) + COALESCE(ms.manual_m, 0) > 0
+             THEN ST_AsGeoJSON(ST_SimplifyPreserveTopology(t.geometry, 0.0005), 5)::json
+           END                                                                       AS trail_geojson,
+           ST_AsGeoJSON(ST_SimplifyPreserveTopology(utp.completed_geometry, 0.0005), 5)::json AS completed_geojson,
            COALESCE(t.category, 'national_trail')                                   AS category
          FROM trails t
          LEFT JOIN user_trail_progress utp
