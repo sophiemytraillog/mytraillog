@@ -33,7 +33,7 @@ export default async function SubscribePage() {
           Welcome back{user.first_name ? `, ${user.first_name}` : ""}!
         </h1>
         <p className="text-[#8A7F72] text-sm mb-6 leading-relaxed">
-          Subscribe for £12.99/year to continue tracking your trails.
+          Subscribe for £8.99/year to continue tracking your trails.
         </p>
         <SubscribeButton className="inline-block px-6 py-3 rounded-xl bg-[#C4652A] text-white font-semibold hover:bg-[#C4652A]/90 transition-colors" />
         <p className="text-[#8A7F72]/60 text-xs mt-5 leading-relaxed">

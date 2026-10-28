@@ -110,7 +110,7 @@ function GracePeriodBanner({ trialEndsAt }: { trialEndsAt: Date | null }) {
   return (
     <div className="bg-[#C4652A] text-white rounded-2xl px-5 py-4 mb-4 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
       <p className="text-sm font-medium flex-1 leading-snug">
-        Your trail progress is paused. Subscribe for £12.99/year to resume tracking.
+        Your trail progress is paused. Subscribe for £8.99/year to resume tracking.
         <span className="block sm:inline sm:before:content-['_·_'] opacity-90 font-normal">
           Your data will be removed in {days} {days === 1 ? "day" : "days"} if you don&apos;t subscribe.
         </span>

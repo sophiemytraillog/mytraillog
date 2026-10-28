@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 const SUCCESS_URL = "https://www.mytraillog.com/dashboard?subscribed=true";
 const CANCEL_URL = "https://www.mytraillog.com/pricing";
 
-// Creates a Stripe Checkout Session for the £12.99/year subscription and
+// Creates a Stripe Checkout Session for the £8.99/year subscription and
 // returns its hosted-page URL — SubscribeButton redirects the browser there.
 // The user is identified to the webhook via client_reference_id (and
 // subscription metadata as a backup), never via anything the browser sends.
