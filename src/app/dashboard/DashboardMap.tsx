@@ -68,12 +68,13 @@ export default function DashboardMap({ trails, selectedSlug, onTrailClick }: Pro
 
       L.tileLayer(DASHBOARD_TILE_URL, { attribution: TILE_ATTRIBUTION, maxZoom: 18 }).addTo(map);
 
-      // Fit to Great Britain (south coast to northern Scotland, western Wales
-      // to eastern England) — invalidateSize first so Leaflet knows the
-      // container dimensions. zoomSnap 0.25 lets the fit land between whole
-      // zoom levels so GB fills the container instead of rounding down.
+      // Fit to the UK and Ireland (south coast of England to northern
+      // Scotland, western Ireland to eastern England) — invalidateSize first
+      // so Leaflet knows the container dimensions. zoomSnap 0.25 lets the fit
+      // land between whole zoom levels so the islands fill the container
+      // instead of rounding down.
       map.invalidateSize();
-      map.fitBounds([[49.9, -6.5], [58.7, 1.8]]);
+      map.fitBounds([[49.5, -11.0], [59.0, 2.0]]);
 
       for (const trail of trails) {
         if (!trail.trail_geojson) continue;
