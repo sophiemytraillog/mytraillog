@@ -18,6 +18,7 @@ export default function SyncButton({
   onSyncComplete,
   hasBasicAccess,
   compact = false,
+  hideIdle = false,
 }: {
   autoSync: boolean;
   initialActivityCount: number;
@@ -35,6 +36,8 @@ export default function SyncButton({
   // (DashboardClient's FirstSyncBanner) still wants the full, prominent
   // version below, since showing real progress IS the point there.
   compact?: boolean;
+  // Compact mode only: render nothing in the idle state (no "Sync now").
+  hideIdle?: boolean;
 }) {
   const router = useRouter();
   const [syncState, setSyncState] = useState<SyncState>("idle");
@@ -204,6 +207,10 @@ export default function SyncButton({
         </span>
       );
     }
+    // Idle "Sync now" link is hidden while the dashboard settings panel is
+    // collapsed. The component itself stays mounted so auto-sync still runs
+    // and live sync states above still show.
+    if (hideIdle) return null;
     return (
       <button
         onClick={startSync}

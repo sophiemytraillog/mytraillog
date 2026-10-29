@@ -331,6 +331,7 @@ export default function DashboardClient({
   const [backfillStatus, setBackfillStatus] = useState<string | null>(null);
   const [requestModalName, setRequestModalName] = useState<string | null>(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -555,22 +556,15 @@ export default function DashboardClient({
           </div>
         </div>
 
-        {/* Two-column layout — stacks on mobile */}
-        <div className="flex flex-col gap-4 lg:flex-row lg:gap-5">
-
-          {/* LEFT column (45%): welcome box + map stacked */}
-          <div className="min-w-0 flex flex-col gap-4 lg:flex-[9]">
-
-            {/* Welcome box — compact settings panel, 2026-09-24 tidy-up.
-                Header (avatar/name/badges/last-synced/sync trigger), then
-                three sectioned groups (Strava Descriptions, Activity
-                Settings, Account) separated by subtle dividers, matching
-                the section-header style already used for the trail-list
-                columns elsewhere on this page (text-[10px] uppercase
-                tracking-widest). Padding and inter-row spacing throughout
-                are deliberately tight — this is a settings panel, not a
-                full page. */}
-            <div className="bg-white border border-[#E5DED4] rounded-2xl px-4 py-3.5">
+            {/* Welcome box — full-width bar above the map and trail lists.
+                The header (avatar/name/badges/last-synced) is always shown;
+                the settings sections (Strava Descriptions, Activity
+                Settings, Account) are collapsed by default behind the
+                Settings toggle so the map and lists get the space. The
+                sections stay mounted while collapsed (just hidden) so any
+                in-progress description backfill or cycling scan keeps its
+                status. */}
+            <div className="bg-white border border-[#E5DED4] rounded-2xl px-4 py-3.5 mb-4">
 
               {/* Header */}
               <div className="flex items-center gap-2.5">
@@ -608,16 +602,38 @@ export default function DashboardClient({
                   <p className="text-[#8A7F72] text-xs mt-0.5 flex items-center gap-1.5 flex-wrap">
                     <span>{formatLastSynced(lastSyncedAt)}</span>
                     {activityCount > 0 && <span>· {activityCount} activit{activityCount === 1 ? "y" : "ies"}</span>}
-                    <span>·</span>
-                    <SyncButton
-                      autoSync={autoSync}
-                      initialActivityCount={activityCount}
-                      onSyncComplete={() => setLastSyncedAt(new Date())}
-                      hasBasicAccess={basicAccess}
-                      compact
-                    />
+                    {/* Always mounted so auto-sync runs and live sync
+                        status shows; the idle "Sync now" link only appears
+                        with settings expanded. empty:hidden drops the "·"
+                        separator when SyncButton renders nothing. */}
+                    <span className="inline-flex items-center gap-1.5 empty:hidden before:content-['·']">
+                      <SyncButton
+                        autoSync={autoSync}
+                        initialActivityCount={activityCount}
+                        onSyncComplete={() => setLastSyncedAt(new Date())}
+                        hasBasicAccess={basicAccess}
+                        compact
+                        hideIdle={!settingsOpen}
+                      />
+                    </span>
                   </p>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setSettingsOpen((o) => !o)}
+                  aria-expanded={settingsOpen}
+                  aria-controls="dashboard-settings"
+                  className="shrink-0 self-start inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-[#8A7F72] hover:text-[#2C2520] hover:bg-[#EAE4DA]/60 transition-colors"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4" aria-hidden="true">
+                    <path fillRule="evenodd" d="M7.84 1.804A1 1 0 018.82 1h2.36a1 1 0 01.98.804l.331 1.652a6.993 6.993 0 011.929 1.115l1.598-.54a1 1 0 011.186.447l1.18 2.044a1 1 0 01-.205 1.251l-1.267 1.113a7.047 7.047 0 010 2.228l1.267 1.113a1 1 0 01.206 1.25l-1.18 2.045a1 1 0 01-1.187.447l-1.598-.54a6.993 6.993 0 01-1.929 1.115l-.33 1.652a1 1 0 01-.98.804H8.82a1 1 0 01-.98-.804l-.331-1.652a6.993 6.993 0 01-1.929-1.115l-1.598.54a1 1 0 01-1.186-.447l-1.18-2.044a1 1 0 01.205-1.251l1.267-1.114a7.05 7.05 0 010-2.227L1.821 7.773a1 1 0 01-.206-1.25l1.18-2.045a1 1 0 011.187-.447l1.598.54A6.993 6.993 0 017.51 3.456l.33-1.652zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
+                  </svg>
+                  <span className="hidden sm:inline">Settings</span>
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className={`w-3.5 h-3.5 transition-transform ${settingsOpen ? "rotate-180" : ""}`} aria-hidden="true">
+                    <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+                  </svg>
+                  <span className="sr-only sm:hidden">Settings</span>
+                </button>
               </div>
 
               {/* Remounts (fresh initialChecked/initialTotal from the server)
@@ -629,8 +645,16 @@ export default function DashboardClient({
                 initialTotal={matchProgress.totalTrails}
               />
 
+              {/* Settings sections — collapsed by default; stacked on
+                  mobile, three columns side by side on desktop. Toggled
+                  with a class (not unmounted) so their state survives. */}
+              <div
+                id="dashboard-settings"
+                className={`mt-3 pt-2.5 border-t border-[#E5DED4] gap-x-6 lg:grid-cols-3 ${settingsOpen ? "grid" : "hidden"}`}
+              >
+
               {/* Strava Descriptions */}
-              <div className="mt-3 pt-2.5 border-t border-[#E5DED4]">
+              <div>
                 <p className="text-[#8A7F72] text-[10px] font-semibold tracking-widest uppercase mb-1.5">
                   Strava Descriptions
                 </p>
@@ -671,9 +695,8 @@ export default function DashboardClient({
                 <UpdateDescriptionsButton hasPremiumAccess={premiumAccess} />
               </div>
 
-              {/* Activity Settings — side by side where there's room,
-                  stacked on narrow/mobile widths via flex-wrap. */}
-              <div className="mt-3 pt-2.5 border-t border-[#E5DED4]">
+              {/* Activity Settings */}
+              <div className="mt-3 pt-2.5 border-t border-[#E5DED4] lg:mt-0 lg:pt-0 lg:border-t-0">
                 <p className="text-[#8A7F72] text-[10px] font-semibold tracking-widest uppercase mb-1.5">
                   Activity Settings
                 </p>
@@ -712,7 +735,7 @@ export default function DashboardClient({
               </div>
 
               {/* Account */}
-              <div className="mt-3 pt-2.5 border-t border-[#E5DED4]">
+              <div className="mt-3 pt-2.5 border-t border-[#E5DED4] lg:mt-0 lg:pt-0 lg:border-t-0">
                 <p className="text-[#8A7F72] text-[10px] font-semibold tracking-widest uppercase mb-1.5">
                   Account
                 </p>
@@ -757,7 +780,14 @@ export default function DashboardClient({
                   Disconnect &amp; Delete My Data
                 </button>
               </div>
+              </div>
             </div>
+
+        {/* Two-column layout — stacks on mobile */}
+        <div className="flex flex-col gap-4 lg:flex-row lg:gap-5">
+
+          {/* LEFT column (45%): map */}
+          <div className="min-w-0 flex flex-col gap-4 lg:flex-[9]">
 
             {/* Map */}
             <DashboardMap
