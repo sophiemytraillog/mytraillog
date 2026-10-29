@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { TILE_URL, TILE_ATTRIBUTION } from "@/lib/map-tiles";
+import { DASHBOARD_TILE_URL, TILE_ATTRIBUTION } from "@/lib/map-tiles";
 
 type Coord = [number, number];
 
@@ -66,7 +66,7 @@ export default function DashboardMap({ trails, selectedSlug, onTrailClick }: Pro
       map.attributionControl.setPrefix(false);
       mapRef.current = map;
 
-      L.tileLayer(TILE_URL, { attribution: TILE_ATTRIBUTION, maxZoom: 18 }).addTo(map);
+      L.tileLayer(DASHBOARD_TILE_URL, { attribution: TILE_ATTRIBUTION, maxZoom: 18 }).addTo(map);
 
       // Fit to Great Britain (south coast to northern Scotland, western Wales
       // to eastern England) — invalidateSize first so Leaflet knows the

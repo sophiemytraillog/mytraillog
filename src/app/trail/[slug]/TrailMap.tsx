@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { TILE_URL, TILE_ATTRIBUTION } from "@/lib/map-tiles";
+import { TRAIL_TILE_URL, TILE_ATTRIBUTION } from "@/lib/map-tiles";
 
 type Coord = [number, number]; // [lon, lat] from GeoJSON
 
@@ -86,7 +86,7 @@ export default function TrailMap({
       map.attributionControl.setPrefix(false);
       mapRef.current = map;
 
-      L.tileLayer(TILE_URL, { attribution: TILE_ATTRIBUTION, maxZoom: 18 }).addTo(map);
+      L.tileLayer(TRAIL_TILE_URL, { attribution: TILE_ATTRIBUTION, maxZoom: 18 }).addTo(map);
 
       // Trail line — grey normally, burnt orange when showRemaining is on
       const trailRings = toLatLngRings(trailGeoJson as GeoJsonGeom);
