@@ -49,6 +49,8 @@ interface UserRow {
   created_at: string;
   activity_count: string;
   trail_match_count: string;
+  trails_checked: string;
+  trails_total: string;
   sync_status: string;
   stale_sync: boolean;
   geometry_count: string;
@@ -128,7 +130,13 @@ export default async function AdminPage() {
             (u.sync_status = 'syncing' AND u.sync_progress_at < NOW() - INTERVAL '3 minutes') AS stale_sync,
             COALESCE(ac.activity_count, 0)::text AS activity_count,
             COALESCE(ac.geometry_count, 0)::text AS geometry_count,
-            COALESCE(tc.trail_match_count, 0)::text AS trail_match_count
+            COALESCE(tc.trail_match_count, 0)::text AS trail_match_count,
+            -- Matching progress: trails with a trail_match_checks row out of
+            -- all current trails. Fully matched when checked = total. Only
+            -- counts checks for trails that still exist, so a deleted trail
+            -- can't push checked above total.
+            COALESCE(mc.trails_checked, 0)::text AS trails_checked,
+            (SELECT COUNT(*) FROM trails)::text AS trails_total
      FROM users u
      LEFT JOIN (
        SELECT user_id,
@@ -142,6 +150,12 @@ export default async function AdminPage() {
        FROM user_trail_progress
        GROUP BY user_id
      ) tc ON tc.user_id = u.id
+     LEFT JOIN (
+       SELECT c.user_id, COUNT(DISTINCT c.trail_id) AS trails_checked
+       FROM trail_match_checks c
+       JOIN trails t ON t.id = c.trail_id
+       GROUP BY c.user_id
+     ) mc ON mc.user_id = u.id
      ORDER BY u.created_at DESC`
   );
 
@@ -246,6 +260,7 @@ export default async function AdminPage() {
                   <th className="px-4 py-2 font-medium">Sync status</th>
                   <th className="px-4 py-2 font-medium text-right">Activities</th>
                   <th className="px-4 py-2 font-medium text-right">Trails matched</th>
+                  <th className="px-4 py-2 font-medium text-right">Trails checked</th>
                   <th className="px-4 py-2 font-medium">Actions</th>
                 </tr>
               </thead>
@@ -272,6 +287,16 @@ export default async function AdminPage() {
                       </td>
                       <td className={`px-4 py-2.5 text-right tabular-nums ${anomaly ? "text-[#C4652A] font-medium" : "text-[#2C2520]"}`}>
                         {u.trail_match_count}
+                      </td>
+                      {/* Matching progress — green once every trail has been
+                          checked, muted grey while still in progress. */}
+                      <td
+                        className={`px-4 py-2.5 text-right tabular-nums whitespace-nowrap ${
+                          parseInt(u.trails_checked) >= parseInt(u.trails_total) ? "text-[#4A7C59] font-medium" : "text-[#8A7F72]"
+                        }`}
+                        title={parseInt(u.trails_checked) >= parseInt(u.trails_total) ? "Fully matched" : "Matching in progress"}
+                      >
+                        {parseInt(u.trails_checked).toLocaleString("en-GB")}/{parseInt(u.trails_total).toLocaleString("en-GB")}
                       </td>
                       <td className="px-4 py-2.5">
                         <div className="flex items-center gap-3 flex-wrap">
