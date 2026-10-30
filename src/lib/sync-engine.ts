@@ -87,10 +87,10 @@ const PAGE_DELAY_MS = 2000;
 const MAX_INLINE_DETAIL_FETCHES_PER_CHUNK = 3;
 const INLINE_DETAIL_FETCH_DELAY_MS = 500;
 
-// Vercel Hobby plan hard-caps function duration at 60s — this can't be
-// raised without a plan upgrade. Default budget leaves margin for the final
-// DB write and SSE close within that ceiling.
-const DEFAULT_BUDGET_MS = 45_000;
+// Vercel Pro (2026-10-30): functions can run up to 300s. 120s per sync
+// chunk leaves the rest of the invocation for the caller's follow-up
+// matching (finishSync) plus the final DB write and SSE close.
+const DEFAULT_BUDGET_MS = 120_000;
 
 interface StravaActivity {
   id: number;

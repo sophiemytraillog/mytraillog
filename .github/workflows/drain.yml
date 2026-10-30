@@ -65,10 +65,19 @@ on:
 
 permissions: {}
 
+# Each drain-batch call can now run up to ~250s (Vercel Pro, 2026-10-30),
+# close to the 5-minute schedule. Never run two at once — a late run waits
+# for the previous one instead of overlapping it and racing on the same
+# users. (Only one run can wait; extra queued runs are dropped, which is
+# fine for a drain.)
+concurrency:
+  group: drain-batch
+  cancel-in-progress: false
+
 jobs:
   drain:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 6
     steps:
       - name: Call drain-batch endpoint
         # -f: fail (non-zero exit) on an HTTP error status, so a broken
@@ -80,6 +89,6 @@ jobs:
         # sync_log + email for that kind of logical-failure alerting
         # rather than the HTTP status code).
         run: |
-          curl -sf --max-time 90 \
+          curl -sf --max-time 295 \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
             https://www.mytraillog.com/api/internal/drain-batch

@@ -11,7 +11,7 @@ function sleep(ms: number) {
 // Same batch shape as the admin route and the old client-driven endpoint —
 // one call's worth of real work, safely within Vercel's 60s function cap.
 const CHAIN_BATCH_SIZE = 30;
-const CHAIN_TIME_BUDGET_MS = 45_000;
+const CHAIN_TIME_BUDGET_MS = 250_000;
 
 // 80 hops * 30 trails/hop = 2,400 trail-checks — comfortably more than the
 // ~1,181-trail catalog even accounting for retries, just a backstop against

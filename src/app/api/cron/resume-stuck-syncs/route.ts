@@ -27,8 +27,8 @@ export const maxDuration = 300;
 // the sweep moves on — a user needing many chunks converges over several
 // days of daily runs, same as they would if they kept reopening the
 // dashboard once a day themselves.
-const PER_USER_BUDGET_MS = 8_000;
-const STALE_SYNC_TIME_BUDGET_MS = 25_000;
+const PER_USER_BUDGET_MS = 40_000;
+const STALE_SYNC_TIME_BUDGET_MS = 180_000;
 const STALE_THRESHOLD_MINUTES = 3;
 
 // Second phase, same run: kick off the daily trail-match backlog drain.

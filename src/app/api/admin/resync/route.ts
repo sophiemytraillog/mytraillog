@@ -26,7 +26,7 @@ export const maxDuration = 300;
 // whole backlog in one shot" reasoning as everywhere else in this app —
 // KickUserButton.tsx loops calling this until `done` is true, same
 // loop-until-done pattern used throughout /admin's other buttons.
-const TOTAL_BUDGET_MS = 45_000;
+const TOTAL_BUDGET_MS = 250_000;
 const MIN_USEFUL_MATCH_BUDGET_MS = 3_000;
 const MIN_USEFUL_DESC_BUDGET_MS = 3_000;
 const MATCH_PAGE_SIZE = 30;
@@ -46,7 +46,7 @@ const MATCH_PAGE_SIZE = 30;
 // deadline well under the 60s cap means this route ALWAYS returns valid
 // JSON — worst case, an honest "timed out, whatever finished is still
 // saved" response — never a platform-level crash page.
-const HARD_DEADLINE_MS = 50_000;
+const HARD_DEADLINE_MS = 280_000;
 
 function withDeadline<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
   return Promise.race([
@@ -95,7 +95,7 @@ export async function POST(request: NextRequest) {
         : { status: userRows[0].sync_status, skipped: true };
 
     if (userRows[0].sync_status === "syncing") {
-      const result = await runSyncChunk(userId, { budgetMs: 20_000, dbPool: syncBatchPool });
+      const result = await runSyncChunk(userId, { budgetMs: 120_000, dbPool: syncBatchPool });
       sync.status = result.status;
       if (result.status === "partial" || result.status === "complete") {
         sync.fetched = result.fetched;

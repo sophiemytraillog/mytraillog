@@ -37,7 +37,7 @@ import { autoDescriptionCutoff } from "@/lib/description-cutoff";
 // chance to run — using whatever matches exist by then, complete or not.
 // (Promise.race doesn't cancel the underlying query; matching keeps
 // running and its results still land, just no longer blocking the write.)
-const TRAIL_MATCHING_TIME_BUDGET_MS = 20_000;
+const TRAIL_MATCHING_TIME_BUDGET_MS = 120_000;
 
 function withTimeBudget<T>(promise: Promise<T>, ms: number): Promise<T | "timed_out"> {
   return Promise.race([

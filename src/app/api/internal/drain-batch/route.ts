@@ -76,7 +76,11 @@ export const maxDuration = 300;
 // 50km ever queue for it) and low-priority relative to the other three, so
 // it goes last and simply gets skipped when nothing's left of the shared
 // budget rather than earning any dedicated slice.
-const TOTAL_REQUEST_BUDGET_MS = 45_000;
+// Raised 45s -> 250s on moving to Vercel Pro (300s maxDuration),
+// 2026-10-30 — same shared-envelope design, same ~50s margin reasoning
+// as the original 15s-under-60s, scaled up. The GitHub Actions caller
+// (drain.yml) waits up to 295s and never runs two calls at once.
+const TOTAL_REQUEST_BUDGET_MS = 250_000;
 const MIN_USEFUL_MATCH_BUDGET_MS = 3_000;
 const MIN_USEFUL_SYNC_RESUME_BUDGET_MS = 3_000;
 const MIN_USEFUL_DETAIL_POLYLINE_BUDGET_MS = 3_000;

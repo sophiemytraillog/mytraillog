@@ -57,7 +57,10 @@ function sleep(ms: number) {
 // below: 15s (sync) + dispatch's own worst case (~10.5s, two 5s attempts
 // plus a retry delay) + FINISH_SYNC_RACE_BUDGET_MS's 30s leaves ~4.5s
 // margin under 60s.
-const CHAIN_TIME_BUDGET_MS = 15_000;
+//
+// Vercel Pro, 2026-10-30 (300s ceiling): 120s sync + ~10.5s dispatch +
+// FINISH_SYNC_RACE_BUDGET_MS's 120s = ~250s, leaving ~50s margin.
+const CHAIN_TIME_BUDGET_MS = 120_000;
 
 // See CHAIN_TIME_BUDGET_MS's comment. finishSync's inline computeTrailProgress
 // calls have no time budget of their own (each trail gets its own 3-minute
@@ -89,7 +92,7 @@ const CHAIN_TIME_BUDGET_MS = 15_000;
 // CHAIN_TIME_BUDGET_MS's comment), there's no reason to keep it this
 // short — 30s gives real per-hop progress a chance without meaningfully
 // changing the platform-ceiling math above.
-const FINISH_SYNC_RACE_BUDGET_MS = 30_000;
+const FINISH_SYNC_RACE_BUDGET_MS = 120_000;
 
 function withDeadline<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
   return Promise.race([
@@ -270,7 +273,7 @@ export function triggerSyncChain(userId: string): Promise<void> {
 // restarted mid-chain, anything. Wired into drain-batch/route.ts alongside
 // the existing description/matching phases so it runs on that same ~2-minute
 // external cadence rather than needing a separate scheduler set up.
-const EXTERNAL_SYNC_RESUME_TIME_BUDGET_MS = 10_000;
+const EXTERNAL_SYNC_RESUME_TIME_BUDGET_MS = 60_000;
 
 // Below this, don't bother starting finishSync at all — same reasoning as
 // drain-batch/route.ts's own MIN_USEFUL_MATCH_BUDGET_MS/

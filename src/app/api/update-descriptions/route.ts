@@ -15,16 +15,15 @@ import {
 } from "@/lib/trail-descriptions";
 
 export const dynamic = "force-dynamic";
-// Vercel Hobby plan hard-caps function duration at 60s — this cannot be
-// raised without a plan upgrade, and vercel.json enforces the same value.
+// Vercel Pro: 300s function limit (vercel.json sets the same value).
 // The rate limiter and the time budget below both exit gracefully well
 // before that on any single run; the client picks up where it left off on
 // the next run because progress is checkpointed in the DB
 // (activities.strava_description_updated), not in memory.
 export const maxDuration = 300;
 // Leaves margin for the discovery query, the final SSE write, and the
-// stream close within the 60s ceiling.
-const TIME_BUDGET_MS = 45_000;
+// stream close within the 300s ceiling.
+const TIME_BUDGET_MS = 250_000;
 
 // reserveBackfillSlot and RateLimiter live in trail-descriptions.ts now,
 // shared with the automatic background chain and the daily cron sweep — see

@@ -49,7 +49,7 @@ async function dispatchNextHop(path: string, body: Record<string, unknown>): Pro
   return false;
 }
 
-const CHAIN_TIME_BUDGET_MS = 45_000;
+const CHAIN_TIME_BUDGET_MS = 250_000;
 
 // Budget-capped anyway (reserveBackfillSlot won't hand out more than
 // DAILY_UPDATE_BUDGET slots across the whole app per day), so this is just a
@@ -151,7 +151,7 @@ export function triggerDescriptionChain(
 // Vercel's 60s ceiling for the dispatch attempt (see dispatchNextHop)
 // rather than pushing closer — this chain still needs that headroom, even
 // though the external-scheduler path below doesn't.
-const DRAIN_HOP_TIME_BUDGET_MS = 48_000;
+const DRAIN_HOP_TIME_BUDGET_MS = 250_000;
 
 // Budget-capped in practice (750/day / ~10-20 activities per hop settles
 // well under this in normal conditions), so this is mainly a backstop
@@ -343,7 +343,7 @@ export function triggerBacklogDrain(): Promise<void> {
 // the design leans on cadence instead of per-call size: 30 calls/hour at
 // ~10-15 activities each easily reaches the daily budget across the
 // scheduled window, same total throughput as fewer/bigger calls would give.
-const EXTERNAL_DRAIN_BATCH_TIME_BUDGET_MS = 20_000;
+const EXTERNAL_DRAIN_BATCH_TIME_BUDGET_MS = 100_000;
 
 // Below this, don't bother starting another candidate — processDescriptionBatch's
 // own loop already needs at least ACTIVITY_NEW_GROUND_BUDGET_MS-equivalent
