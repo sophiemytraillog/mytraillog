@@ -418,12 +418,21 @@ export async function runExternalSyncResumeBatch(
   }
 
   if (result.status === "complete") {
-    await Promise.all([
-      triggerMatchChain(candidate.id),
-      triggerDescriptionChain(candidate.id, "sync"),
-    ]).catch((err) => {
-      console.error(`[external-sync-resume] Post-complete match/description trigger failed for ${candidate.first_name ?? candidate.id}:`, err);
-    });
+    // Hand the match/description chains off to their OWN invocations
+    // (2026-10-30) rather than running their first batch inline here —
+    // triggerMatchChain's first hop can take up to its full 250s budget,
+    // which inside drain-batch ate the rest of the run (confirmed: one
+    // completed resume blocked the next two resumes and all matching).
+    // Dispatch only waits for each endpoint to acknowledge.
+    const [matchOk, descOk] = await Promise.all([
+      dispatchNextHop("/api/internal/continue-matching", { userId: candidate.id, hop: 0 }),
+      dispatchNextHop("/api/internal/continue-descriptions", { userId: candidate.id, hop: 0 }),
+    ]);
+    if (!matchOk || !descOk) {
+      console.error(
+        `[external-sync-resume] Post-complete dispatch failed for ${candidate.first_name ?? candidate.id} (matching: ${matchOk}, descriptions: ${descOk}) — the match/description drains will pick them up instead`
+      );
+    }
   }
 
   logSyncEvent(ADMIN_USER_ID, "external_sync_resume", {
