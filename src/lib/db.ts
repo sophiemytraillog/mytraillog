@@ -24,7 +24,10 @@ export const pool =
   new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: { rejectUnauthorized: false },
-    max: process.env.NODE_ENV === "production" ? 3 : 10,
+    // Raised 3 -> 6 (2026-10-30): Postgres had ~15 of 60 connections in use
+    // while the app was failing with "timeout exceeded when trying to
+    // connect" — the queue was in these app-side pools, not the database.
+    max: process.env.NODE_ENV === "production" ? 6 : 10,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
   });
@@ -77,9 +80,15 @@ if (process.env.NODE_ENV !== "production") {
 // (match-trails' per-trail write, and external-drain's own batch call) and
 // match_drain_hop hops logging "started" and then nothing at all as the
 // whole function hung waiting for a connection that never freed up. Each
-// drain now has its own single-connection pool, so neither can starve the
-// other no matter how busy either one is.
-function makeBatchPool(prodMax = 1) {
+// drain now has its own pool, so neither can starve the other no matter how
+// busy either one is.
+//
+// Raised 1 -> 4 per pool (2026-10-30, Vercel Pro): with 300s functions and
+// Fluid compute running several invocations on one instance, a single
+// connection per pool was the bottleneck — 113 sync chunks failed in one day
+// with "timeout exceeded when trying to connect" while Postgres itself sat
+// at ~15/60 connections. Worst case per instance is now 6 + 4 + 4 + 4 = 18.
+function makeBatchPool(prodMax = 4) {
   return new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: { rejectUnauthorized: false },
@@ -115,7 +124,8 @@ if (process.env.NODE_ENV !== "production") {
 // of serializing into a permanent queue, while still being a small,
 // dedicated pool that can't compete with live user-facing traffic on the
 // shared `pool`.
-export const matchBatchPool = globalForPg._pgMatchBatchPool ?? makeBatchPool(3);
+// (Now 4, same as the other batch pools — see makeBatchPool, 2026-10-30.)
+export const matchBatchPool = globalForPg._pgMatchBatchPool ?? makeBatchPool(4);
 const isNewMatchBatchPool = !globalForPg._pgMatchBatchPool;
 if (isNewMatchBatchPool) {
   matchBatchPool.on("error", (err) => {

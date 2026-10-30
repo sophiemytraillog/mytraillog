@@ -3,6 +3,9 @@ import { runExternalDrainBatch } from "@/lib/description-chain";
 import { runExternalMatchDrainBatch } from "@/lib/match-chain";
 import { runExternalSyncResumeBatch } from "@/lib/sync-chain";
 import { runExternalDetailPolylineDrainBatch } from "@/lib/detail-polyline";
+import { randomUUID } from "node:crypto";
+import { pool } from "@/lib/db";
+import { ADMIN_USER_ID } from "@/lib/admin";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -103,6 +106,54 @@ export async function GET(request: NextRequest) {
     console.warn("[internal/drain-batch] CRON_SECRET not set — endpoint is unauthenticated");
   }
 
+  // One run at a time (2026-10-30). Vercel Cron now calls this every
+  // minute (GitHub Actions stays as a backup), but a run can take ~250s, so
+  // without this several runs would overlap and race on the same users —
+  // e.g. two description drains writing the same activities. Lease is a
+  // single atomic insert into sync_log: it succeeds only if no other run has
+  // started within LEASE_SECONDS without logging a matching finish. A run
+  // killed before finishing just holds the lease until it expires.
+  const runId = randomUUID();
+  const { rows: leaseRows } = await pool.query<{ id: string }>(
+    `INSERT INTO sync_log (user_id, event, detail)
+     SELECT $1, 'drain_batch_started', jsonb_build_object('runId', $2::text)
+     WHERE NOT EXISTS (
+       SELECT 1 FROM sync_log s
+       WHERE s.user_id = $1
+         AND s.event = 'drain_batch_started'
+         AND s.created_at > NOW() - INTERVAL '${DRAIN_LEASE_SECONDS} seconds'
+         AND NOT EXISTS (
+           SELECT 1 FROM sync_log f
+           WHERE f.user_id = $1
+             AND f.event = 'drain_batch_finished'
+             AND f.created_at >= s.created_at
+             AND f.detail->>'runId' = s.detail->>'runId'
+         )
+     )
+     RETURNING id`,
+    [ADMIN_USER_ID, runId]
+  );
+  if (leaseRows.length === 0) {
+    return NextResponse.json({ skipped: true, reason: "another drain-batch run is still in progress" });
+  }
+
+  try {
+    return await runDrainPhases();
+  } finally {
+    await pool
+      .query(
+        `INSERT INTO sync_log (user_id, event, detail) VALUES ($1, 'drain_batch_finished', jsonb_build_object('runId', $2::text))`,
+        [ADMIN_USER_ID, runId]
+      )
+      .catch((err) => console.error("[internal/drain-batch] Failed to release lease:", err.message));
+  }
+}
+
+// Just over the 300s maxDuration, so a lease from a run that was killed
+// mid-way can never block the next run for longer than one function lifetime.
+const DRAIN_LEASE_SECONDS = 305;
+
+async function runDrainPhases(): Promise<NextResponse> {
   const startedAt = Date.now();
   const descriptions = await runExternalDrainBatch();
 
