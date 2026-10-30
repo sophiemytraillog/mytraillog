@@ -105,6 +105,13 @@ export async function runMatchBatchAndChain(
     return;
   }
 
+  // Sync not complete yet — stop here instead of dispatching empty hops.
+  // Sync completion re-triggers this chain (sync-chain.ts / sync route).
+  if (result.skippedSyncIncomplete) {
+    console.log(`[match-chain] Skipping user ${userId} — sync not complete yet`);
+    return;
+  }
+
   try {
     // Awaited only until the next hop acknowledges receipt (its own handler
     // responds immediately and does its batch afterward via its own
@@ -276,6 +283,10 @@ async function pickNextMatchDrainCandidate(): Promise<{ id: string; first_name: 
        -- hasBasicAccess (kept in sync manually, since this runs as raw SQL
        -- rather than importing the JS helper).
        AND u.subscription_status IN ('trial', 'active')
+       -- Only users whose sync has finished (2026-10-30) — see
+       -- matchNextBatch's sync_status guard. Without this the drain would
+       -- keep picking a mid-sync user and get an empty, skipped batch.
+       AND u.sync_status = 'complete'
        ORDER BY COALESCE(
          (SELECT MAX(s.created_at) FROM sync_log s
           WHERE s.user_id = u.id AND s.event IN ('cron_match_sweep', 'client_match_batch')),

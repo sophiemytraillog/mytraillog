@@ -86,15 +86,18 @@ export async function POST(request: NextRequest) {
   const runPhases = async (): Promise<ResyncResult> => {
     const startedAt = Date.now();
 
-    // ── Phase 1: sync — one chunk, only if a sync is actually in progress.
-    // A "complete" account has nothing to resume; running finishSync's own
-    // registration query again for it would just be wasted work.
+    // ── Phase 1: sync — one chunk, only if a sync is in progress or errored
+    // (an 'error' sync is usually a transient DB-connection failure and
+    // resumes fine — 2026-10-30). A "complete" account has nothing to
+    // resume; running finishSync's own registration query again for it
+    // would just be wasted work.
+    const needsSync = userRows[0].sync_status === "syncing" || userRows[0].sync_status === "error";
     const sync: { status: string; fetched?: number; saved?: number; skipped?: boolean } =
-      userRows[0].sync_status === "syncing"
+      needsSync
         ? { status: "syncing" } // placeholder, overwritten below once runSyncChunk resolves
         : { status: userRows[0].sync_status, skipped: true };
 
-    if (userRows[0].sync_status === "syncing") {
+    if (needsSync) {
       const result = await runSyncChunk(userId, { budgetMs: 120_000, dbPool: syncBatchPool });
       sync.status = result.status;
       if (result.status === "partial" || result.status === "complete") {
@@ -131,7 +134,11 @@ export async function POST(request: NextRequest) {
       sync.status === "rate_limited" ||
       sync.status === "error" ||
       sync.status === "subscription_required";
-    const matchingDone = "skipped" in matching ? true : matching.done;
+    // Matching skipped because the sync isn't complete counts as done for
+    // THIS call: if the sync is still partial, syncDone above keeps the
+    // button looping anyway; if the sync hit a terminal state, there's
+    // nothing more matching can do until it's resolved.
+    const matchingDone = "skipped" in matching ? true : matching.done || matching.skippedSyncIncomplete === true;
     const descriptionsDone = "skipped" in descriptions ? true : descriptions.done || descriptions.budgetExhausted;
 
     return { sync, matching, descriptions, done: syncDone && matchingDone && descriptionsDone };

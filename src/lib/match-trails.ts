@@ -427,6 +427,10 @@ export interface MatchBatchResult {
   // under pressure and it's worth backing off before dispatching the next
   // hop, rather than immediately hammering again.
   hadFailures: boolean;
+  // True when nothing was attempted because the user's sync isn't
+  // 'complete' yet (see matchNextBatch). Callers should stop rather than
+  // retry — matching resumes once the sync finishes.
+  skippedSyncIncomplete?: boolean;
 }
 
 // Same bbox tolerance as sync-engine.ts's NEARBY_TRAILS_BBOX_DEGREES —
@@ -471,6 +475,37 @@ export async function matchNextBatch(
   dbPool: Pool = pool
 ): Promise<MatchBatchResult> {
   const startedAt = Date.now();
+
+  // Only match once the user's sync is complete (2026-10-30). Checking
+  // trails against a partial activity set writes trail_match_checks rows
+  // that the STALE clause below then has to redo once the rest of the
+  // history lands — and makes the admin "Trails checked" counter reach
+  // the total before matching has really seen every activity. Users mid-
+  // sync (or whose sync errored, which drain-batch now retries) are
+  // skipped; sync completion triggers the match chain, and the match
+  // drain picks up anyone else. finishSync's per-chunk nearby-trail
+  // matching and the webhook are deliberately NOT gated (early progress
+  // for new users), so they still call computeTrailProgress directly.
+  const { rows: [syncRow] } = await dbPool.query<{ sync_status: string }>(
+    "SELECT sync_status FROM users WHERE id = $1",
+    [userId]
+  );
+  if (syncRow?.sync_status !== "complete") {
+    const progress = await dbPool.query<{ total: string; checked: string }>(
+      `SELECT (SELECT COUNT(*) FROM trails) AS total,
+              (SELECT COUNT(*) FROM trail_match_checks WHERE user_id = $1) AS checked`,
+      [userId]
+    );
+    return {
+      checkedThisBatch: 0,
+      matchedThisBatch: 0,
+      totalChecked: parseInt(progress.rows[0].checked),
+      totalTrails: parseInt(progress.rows[0].total),
+      done: false,
+      hadFailures: false,
+      skippedSyncIncomplete: true,
+    };
+  }
 
   const { rows: candidates } = await dbPool.query<{ id: string }>(
     `SELECT t.id

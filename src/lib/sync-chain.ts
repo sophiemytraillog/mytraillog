@@ -290,11 +290,26 @@ const MIN_USEFUL_FINISH_SYNC_MS = 3_000;
 // reached its next heartbeat yet.
 const EXTERNAL_SYNC_RESUME_STALE_SECONDS = 90;
 
+// How long an errored sync waits before drain-batch retries it — see
+// pickNextStaleSyncCandidate.
+const EXTERNAL_SYNC_ERROR_RETRY_SECONDS = 300;
+
 async function pickNextStaleSyncCandidate(): Promise<{ id: string; first_name: string | null } | null> {
   const { rows } = await syncBatchPool.query<{ id: string; first_name: string | null }>(
     `SELECT id, first_name FROM users
-     WHERE sync_status = 'syncing'
-       AND sync_progress_at < NOW() - INTERVAL '${EXTERNAL_SYNC_RESUME_STALE_SECONDS} seconds'
+     WHERE (
+         (sync_status = 'syncing'
+          AND sync_progress_at < NOW() - INTERVAL '${EXTERNAL_SYNC_RESUME_STALE_SECONDS} seconds')
+         -- Errored syncs are retried too (2026-10-30): in practice they're
+         -- almost all transient "timeout exceeded when trying to connect"
+         -- DB-pool failures (or a Strava rate limit) that resume fine, but
+         -- nothing else ever revisits sync_status='error' — and matching
+         -- now waits for 'complete', so an unretried error would leave the
+         -- user unmatched forever. Longer wait than 'syncing' so a busy
+         -- pool / rate-limit window has time to clear first.
+         OR (sync_status = 'error'
+          AND sync_progress_at < NOW() - INTERVAL '${EXTERNAL_SYNC_ERROR_RETRY_SECONDS} seconds')
+       )
        -- Basic-feature gate (2026-09-30 convention, see match-chain.ts and
        -- description-chain.ts's own candidate queries) — kept in sync
        -- manually since this runs as raw SQL rather than importing
