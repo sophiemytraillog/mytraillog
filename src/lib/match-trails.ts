@@ -1,4 +1,4 @@
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { pool } from "@/lib/db";
 import { CYCLING_ACTIVITY_TYPES } from "@/lib/strava";
 
@@ -297,6 +297,47 @@ export async function computeNewGroundExcludingActivity(
   }
 }
 
+// ── Global cap on concurrent heavy matching queries (2026-10-30) ───────────
+// MATCH_SQL / ACTIVITY_MATCH_SQL are heavy PostGIS unions. Postgres (a small
+// Supabase instance) restarted at 17:42:32 on 2026-10-30 — taking the whole
+// app down for a moment — shortly after background matching concurrency went
+// up (bigger app pools, parallel match chains, a per-minute drain). App-side
+// pool sizes can't bound this on their own: every Vercel instance has its own
+// pools. So each heavy query first claims one of MAX_CONCURRENT_MATCH_QUERIES
+// transaction-scoped advisory-lock slots, which Postgres enforces across all
+// instances. If every slot is taken, the transaction is rolled back (so a
+// waiting caller doesn't hold a database backend) and it retries shortly.
+const MAX_CONCURRENT_MATCH_QUERIES = 3;
+const MATCH_SLOT_LOCK_CLASS = 7301; // arbitrary, just unique to this use
+const MATCH_SLOT_RETRY_MS = 750;
+// A caller that can't get a slot within this long gives up on this trail —
+// it isn't checkpointed, so a later sweep retries it.
+const MATCH_SLOT_MAX_WAIT_MS = 120_000;
+
+/**
+ * BEGINs a transaction on `client` holding one heavy-query slot, retrying
+ * until one is free. On return the caller is inside that transaction and
+ * must COMMIT or ROLLBACK, which releases the slot.
+ */
+async function beginWithMatchSlot(client: PoolClient): Promise<void> {
+  const startedAt = Date.now();
+  for (;;) {
+    await client.query("BEGIN");
+    for (let slot = 1; slot <= MAX_CONCURRENT_MATCH_QUERIES; slot++) {
+      const { rows: [r] } = await client.query<{ ok: boolean }>(
+        "SELECT pg_try_advisory_xact_lock($1, $2) AS ok",
+        [MATCH_SLOT_LOCK_CLASS, slot]
+      );
+      if (r?.ok) return;
+    }
+    await client.query("ROLLBACK");
+    if (Date.now() - startedAt > MATCH_SLOT_MAX_WAIT_MS) {
+      throw new Error(`No matching slot free after ${MATCH_SLOT_MAX_WAIT_MS}ms`);
+    }
+    await sleep(MATCH_SLOT_RETRY_MS + Math.floor(Math.random() * 500));
+  }
+}
+
 export async function computeTrailProgress(
   userId: string,
   trailIds?: string[],
@@ -330,7 +371,7 @@ export async function computeTrailProgress(
       // backend connection through Supabase's transaction-mode pooler.
       // Without BEGIN, SET LOCAL fires on backend A and MATCH_SQL runs on
       // backend B (which still has the global 2-minute cap).
-      await client.query("BEGIN");
+      await beginWithMatchSlot(client);
       await client.query("SET LOCAL statement_timeout = '180000'"); // 3 min
       const result = await client.query<{ trail_id: string }>(MATCH_SQL, [
         userId,
@@ -344,7 +385,7 @@ export async function computeTrailProgress(
       if (wasMatched) {
         matched++;
         try {
-          await client.query("BEGIN");
+          await beginWithMatchSlot(client);
           await client.query("SET LOCAL statement_timeout = '180000'"); // 3 min — some trails (e.g. South West Coast Path) are huge
           await client.query(ACTIVITY_MATCH_SQL, [userId, trail.id, includeCycling, cyclingTypes]);
           await client.query(
