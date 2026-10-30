@@ -109,7 +109,8 @@ export async function GET(request: NextRequest) {
      JOIN users u ON u.id = a.user_id
      WHERE a.strava_description_updated = FALSE
        AND a.description_update_attempts = 0
-       AND u.strava_description_updates = TRUE`
+       AND u.strava_description_updates = TRUE
+       AND (u.auto_description_since IS NULL OR a.start_date >= u.auto_description_since)`
   );
   if (parseInt(neverAttempted.n) > 0) {
     issues.push(

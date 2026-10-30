@@ -517,8 +517,13 @@ export async function finishSync(
        FROM activities
        WHERE id = ANY($1::uuid[])
          AND geometry IS NOT NULL
-         AND strava_description_updated = FALSE`,
-      [newDbIds]
+         AND strava_description_updated = FALSE
+         -- Skip history from before the user's auto-description cut-off
+         -- (schema.sql's auto_description_since; NULL = no cut-off).
+         AND start_date >= COALESCE(
+           (SELECT auto_description_since FROM users WHERE id = $2), '-infinity'::timestamptz
+         )`,
+      [newDbIds, userId]
     );
     for (const act of toUpdate) {
       try {

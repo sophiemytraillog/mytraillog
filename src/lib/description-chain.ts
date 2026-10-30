@@ -204,6 +204,7 @@ async function pickNextDrainCandidate(): Promise<{ id: string; first_name: strin
          SELECT 1 FROM activities a
          JOIN activity_trail_matches atm ON atm.activity_id = a.id
          WHERE a.user_id = u.id AND a.strava_description_updated = FALSE
+           AND (u.auto_description_since IS NULL OR a.start_date >= u.auto_description_since)
        )
        -- Basic-feature gate (2026-09-30): new-activity description writes
        -- stop for grace_period/expired accounts, same as sync/matching —

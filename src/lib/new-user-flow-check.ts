@@ -414,7 +414,8 @@ async function checkDrainStatus(): Promise<DiagnosticStep> {
          JOIN users u ON u.id = a.user_id
          WHERE a.strava_description_updated = FALSE
            AND u.strava_description_updates = TRUE
-           AND u.subscription_status IN ('trial', 'active')`
+           AND u.subscription_status IN ('trial', 'active')
+           AND (u.auto_description_since IS NULL OR a.start_date >= u.auto_description_since)`
       );
 
       const { rows: throughputRows } = await pool.query<{ day: string; updated: string }>(

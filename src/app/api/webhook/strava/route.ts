@@ -309,8 +309,9 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number) {
     const { rows: [userPrefs] } = await pool.query<{
       strava_description_updates: boolean;
       description_mode: DescriptionMode;
+      auto_description_since: Date | null;
     }>(
-      "SELECT strava_description_updates, description_mode FROM users WHERE id = $1",
+      "SELECT strava_description_updates, description_mode, auto_description_since FROM users WHERE id = $1",
       [user.id]
     );
 
@@ -385,7 +386,13 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number) {
       });
     }
 
-    const wantsDescriptionUpdate = userPrefs?.strava_description_updates ?? false;
+    // Same auto-description cut-off as the other automatic writers (see
+    // schema.sql's auto_description_since) — e.g. an old activity uploaded
+    // to Strava after signup isn't auto-described.
+    const autoSince = userPrefs?.auto_description_since ? new Date(userPrefs.auto_description_since) : null;
+    const wantsDescriptionUpdate =
+      (userPrefs?.strava_description_updates ?? false) &&
+      (!autoSince || new Date(activity.start_date) >= autoSince);
 
     console.log(
       `[webhook/strava] Saved activity ${activityId}, matching ${trailIds.length} nearby trail(s)…`

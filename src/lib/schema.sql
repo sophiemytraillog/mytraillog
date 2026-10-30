@@ -166,6 +166,16 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS include_cycling            BOOLEAN NO
 -- activity covers genuinely new ground.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS description_mode TEXT NOT NULL DEFAULT 'full';
 
+-- Cut-off for AUTOMATIC description writes (2026-10-30). New users get
+-- description updates ON by default with this set to their signup time, so
+-- the automatic writers (first sync, background drain, webhook) only touch
+-- activities recorded after they joined — never years of old history they
+-- didn't opt into. Old activities are only written via the manual
+-- "Update historical activity descriptions" option (/api/update-descriptions),
+-- which ignores this. NULL = no cut-off (every user who existed before this
+-- change keeps the previous behaviour).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS auto_description_since TIMESTAMPTZ;
+
 DO $$
 BEGIN
   IF NOT EXISTS (

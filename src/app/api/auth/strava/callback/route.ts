@@ -108,9 +108,16 @@ export async function GET(request: NextRequest) {
       strava_id, username, first_name, last_name, profile_image_url,
       strava_access_token, strava_refresh_token, strava_token_expires_at,
       strava_scope, measurement_preference,
-      subscription_status, trial_started_at, trial_ends_at
+      subscription_status, trial_started_at, trial_ends_at,
+      strava_description_updates, description_mode, auto_description_since
     ) VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8), $9, $10,
-      ${trialFieldsSql})
+      ${trialFieldsSql},
+      -- New accounts: description updates ON by default in Full detail,
+      -- but only for activities recorded from now on (see schema.sql's
+      -- auto_description_since). Insert-only — the ON CONFLICT branch
+      -- below never touches these, so a reconnecting user keeps whatever
+      -- they chose.
+      TRUE, 'full', NOW())
     ON CONFLICT (strava_id) DO UPDATE SET
       username                = EXCLUDED.username,
       first_name              = EXCLUDED.first_name,

@@ -681,6 +681,11 @@ export async function processDescriptionBatch(
      FROM activities a
      JOIN activity_trail_matches atm ON atm.activity_id = a.id
      WHERE a.user_id = $1 AND a.strava_description_updated = FALSE
+       -- Automatic writes skip history from before the user's cut-off
+       -- (schema.sql's auto_description_since; NULL = no cut-off).
+       AND a.start_date >= COALESCE(
+         (SELECT auto_description_since FROM users WHERE id = $1), '-infinity'::timestamptz
+       )
      ORDER BY a.strava_activity_id DESC`,
     [userId]
   );
