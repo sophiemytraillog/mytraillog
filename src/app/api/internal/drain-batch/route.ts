@@ -153,42 +153,63 @@ export async function GET(request: NextRequest) {
 // mid-way can never block the next run for longer than one function lifetime.
 const DRAIN_LEASE_SECONDS = 305;
 
+// Sync-resume phase sizing (2026-10-30). Runs FIRST: users stuck mid-sync
+// (or retried after an error) need to reach sync_status='complete' before
+// matching will touch them at all (see matchNextBatch's guard), so there's
+// no point spending the run on matching while they wait. Up to
+// MAX_SYNC_RESUMES_PER_RUN different users, one after another, each capped
+// at SYNC_RESUME_PER_USER_MS, with the whole phase capped at
+// SYNC_RESUME_PHASE_BUDGET_MS so descriptions/matching still get at least
+// ~100s of the 250s envelope.
+const MAX_SYNC_RESUMES_PER_RUN = 3;
+const SYNC_RESUME_PER_USER_MS = 60_000;
+const SYNC_RESUME_PHASE_BUDGET_MS = 150_000;
+
 async function runDrainPhases(): Promise<NextResponse> {
   const startedAt = Date.now();
+  const elapsed = () => Date.now() - startedAt;
+
+  // ── 1. Sync resumes ────────────────────────────────────────────────────
+  // Each resume refreshes that user's sync_progress_at as its chunk starts,
+  // so the next pick naturally moves on to a different stale user; the
+  // pickedIds check is a safety net against re-running the same one.
+  const syncResumes: Awaited<ReturnType<typeof runExternalSyncResumeBatch>>[] = [];
+  const pickedIds = new Set<string>();
+  for (let i = 0; i < MAX_SYNC_RESUMES_PER_RUN; i++) {
+    const remainingInPhase = SYNC_RESUME_PHASE_BUDGET_MS - elapsed();
+    if (remainingInPhase < MIN_USEFUL_SYNC_RESUME_BUDGET_MS) break;
+    const resume = await runExternalSyncResumeBatch(Math.min(SYNC_RESUME_PER_USER_MS, remainingInPhase));
+    if (!resume.candidateId) break; // nobody left to resume
+    if (pickedIds.has(resume.candidateId)) break;
+    pickedIds.add(resume.candidateId);
+    syncResumes.push(resume);
+  }
+
+  // ── 2. Descriptions (usually a few seconds) ────────────────────────────
   const descriptions = await runExternalDrainBatch();
 
-  const remainingAfterDescriptions = TOTAL_REQUEST_BUDGET_MS - (Date.now() - startedAt);
+  // ── 3. Matching — whatever's left of the shared envelope ───────────────
+  const remainingAfterDescriptions = TOTAL_REQUEST_BUDGET_MS - elapsed();
   if (remainingAfterDescriptions < MIN_USEFUL_MATCH_BUDGET_MS) {
     return NextResponse.json({
+      syncResumes,
       descriptions,
       matching: { skipped: true, reason: "insufficient time remaining after description phase" },
-      syncResume: { skipped: true, reason: "insufficient time remaining after description phase" },
+      detailPolyline: { skipped: true, reason: "insufficient time remaining after description phase" },
     });
   }
-
   const matching = await runExternalMatchDrainBatch(remainingAfterDescriptions);
 
-  const remainingAfterMatching = TOTAL_REQUEST_BUDGET_MS - (Date.now() - startedAt);
-  if (remainingAfterMatching < MIN_USEFUL_SYNC_RESUME_BUDGET_MS) {
+  // ── 4. Detail polylines — lowest priority, only if time is left ────────
+  const remainingAfterMatching = TOTAL_REQUEST_BUDGET_MS - elapsed();
+  if (remainingAfterMatching < MIN_USEFUL_DETAIL_POLYLINE_BUDGET_MS) {
     return NextResponse.json({
+      syncResumes,
       descriptions,
       matching,
-      syncResume: { skipped: true, reason: "insufficient time remaining after matching phase" },
+      detailPolyline: { skipped: true, reason: "insufficient time remaining after matching phase" },
     });
   }
-
-  const syncResume = await runExternalSyncResumeBatch(remainingAfterMatching);
-
-  const remainingAfterSyncResume = TOTAL_REQUEST_BUDGET_MS - (Date.now() - startedAt);
-  if (remainingAfterSyncResume < MIN_USEFUL_DETAIL_POLYLINE_BUDGET_MS) {
-    return NextResponse.json({
-      descriptions,
-      matching,
-      syncResume,
-      detailPolyline: { skipped: true, reason: "insufficient time remaining after sync-resume phase" },
-    });
-  }
-
-  const detailPolyline = await runExternalDetailPolylineDrainBatch(remainingAfterSyncResume);
-  return NextResponse.json({ descriptions, matching, syncResume, detailPolyline });
+  const detailPolyline = await runExternalDetailPolylineDrainBatch(remainingAfterMatching);
+  return NextResponse.json({ syncResumes, descriptions, matching, detailPolyline });
 }
