@@ -6,6 +6,7 @@ import { hasBasicAccess } from "@/lib/subscription";
 import { getSubscriptionStatus } from "@/lib/subscription-db";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 // See sync-engine.ts's NEARBY_TRAILS_BBOX_DEGREES / MAX_TRAILS_PER_FINISH_SYNC
 // comment for the full story: ST_DWithin against trails.simplified_geometry

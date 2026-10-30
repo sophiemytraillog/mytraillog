@@ -3,7 +3,7 @@ import { waitUntil } from "@vercel/functions";
 import { runDescriptionBatchAndChain } from "@/lib/description-chain";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 // Server-to-server relay link in the background description-writing chain
 // (see description-chain.ts) — same shape as /api/internal/continue-matching.

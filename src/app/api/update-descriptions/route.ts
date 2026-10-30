@@ -21,7 +21,7 @@ export const dynamic = "force-dynamic";
 // before that on any single run; the client picks up where it left off on
 // the next run because progress is checkpointed in the DB
 // (activities.strava_description_updated), not in memory.
-export const maxDuration = 60;
+export const maxDuration = 300;
 // Leaves margin for the discovery query, the final SSE write, and the
 // stream close within the 60s ceiling.
 const TIME_BUDGET_MS = 45_000;

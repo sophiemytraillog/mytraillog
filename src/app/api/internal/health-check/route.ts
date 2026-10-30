@@ -6,7 +6,7 @@ import { CHAIN_DISPATCH_ORIGIN } from "@/lib/chain-origin";
 import { autoDescriptionCutoffSql } from "@/lib/description-cutoff";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 // Daily pre/post-launch sanity sweep — read-only, no remediation. Every
 // query here mirrors one already proven against production during the

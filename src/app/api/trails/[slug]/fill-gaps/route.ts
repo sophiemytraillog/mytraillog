@@ -5,7 +5,7 @@ import { pool } from "@/lib/db";
 import { hasBasicAccess } from "@/lib/subscription";
 import { getSubscriptionStatus } from "@/lib/subscription-db";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 export async function POST(
   req: Request,

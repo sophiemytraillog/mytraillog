@@ -3,7 +3,7 @@ import { waitUntil } from "@vercel/functions";
 import { runSyncChunkAndChain } from "@/lib/sync-chain";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 // Server-to-server relay link in the background sync-continuation chain
 // (see sync-chain.ts). Not user-facing — called by a previous hop of the

@@ -8,7 +8,7 @@ import { logSyncEvent } from "@/lib/sync-log";
 import { ADMIN_USER_ID } from "@/lib/admin";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 // Server-side fallback for the dashboard's self-heal nudge (see
 // dashboard/page.tsx's staleSync check) — catches users who abandoned a

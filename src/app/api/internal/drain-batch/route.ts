@@ -5,7 +5,7 @@ import { runExternalSyncResumeBatch } from "@/lib/sync-chain";
 import { runExternalDetailPolylineDrainBatch } from "@/lib/detail-polyline";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 // Entry point for an EXTERNAL scheduler (cron-job.org or similar), not for
 // anything inside this app — see description-chain.ts's runExternalDrainBatch

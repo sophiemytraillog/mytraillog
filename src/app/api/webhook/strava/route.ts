@@ -89,7 +89,7 @@ export async function GET(req: Request) {
 // actually finish for a power user (confirmed: 127-283s for 5-7 nearby
 // trails), but every extra second here is a second less work update-descriptions'
 // backlog scan has left to do later.
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 export async function POST(req: Request) {
   let event: StravaWebhookEvent;

@@ -4,7 +4,7 @@ import { ADMIN_USER_ID } from "@/lib/admin";
 import { runNewUserFlowDiagnostics } from "@/lib/new-user-flow-check";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 // Powers the admin dashboard's "System Health" button — same underlying
 // check as /api/internal/test-new-user-flow (see new-user-flow-check.ts),

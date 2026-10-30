@@ -4,6 +4,7 @@ import { CYCLING_ACTIVITY_TYPES } from "@/lib/strava";
 import { computeTrailProgress } from "@/lib/match-trails";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 // Mirrors backfill-cycling/route.ts, run after include_cycling flips OFF
 // instead of on. activity_trail_matches rows created while cycling was

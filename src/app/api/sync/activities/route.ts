@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
 // A single request only ever runs one bounded sync-engine chunk; large
 // histories finish over several chunks, driven by SyncButton's auto-continue
 // on the "partial" event (see src/app/dashboard/SyncButton.tsx).
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 export async function GET(request: NextRequest) {
   const userId = cookies().get("strava_user_id")?.value;

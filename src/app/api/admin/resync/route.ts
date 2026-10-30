@@ -8,7 +8,7 @@ import { ADMIN_USER_ID } from "@/lib/admin";
 import { logSyncEvent } from "@/lib/sync-log";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 // Backs /admin's single "Kick user" button (KickUserButton.tsx) —
 // 2026-09-23, replacing what were originally two separate buttons

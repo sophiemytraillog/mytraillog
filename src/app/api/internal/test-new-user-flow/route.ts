@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { runNewUserFlowDiagnostics } from "@/lib/new-user-flow-check";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 // External-monitoring entry point — hit this on a schedule (or manually)
 // to get a PASS/WARN/FAIL readout of every stage a brand-new user's
