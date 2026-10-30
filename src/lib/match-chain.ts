@@ -225,6 +225,28 @@ const MAX_DRAIN_HOPS = 300;
 // this hop just tries again next time, instead of consuming the entire
 // function budget silently.
 const CANDIDATE_QUERY_TIMEOUT_MS = 10_000;
+// The stale-only scan below (users already at 1,181/1,181 who have newer
+// activities near a checked trail) grew to ~23s with today's large-history
+// sign-ups — over CANDIDATE_QUERY_TIMEOUT_MS, so every pick failed and the
+// drain matched nobody for ~40 minutes (2026-10-30). It now only runs when
+// no user has unchecked trails (the cheap first query), and gets more time.
+const STALE_CANDIDATE_QUERY_TIMEOUT_MS = 60_000;
+
+// Users with trails never checked at all — a cheap count comparison, and
+// the users who matter most (still short of 1,181/1,181).
+const INCOMPLETE_CANDIDATE_SQL = `
+  SELECT u.id, u.first_name
+  FROM users u
+  WHERE u.subscription_status IN ('trial', 'active')
+    AND u.sync_status = 'complete'
+    AND (SELECT COUNT(*) FROM trail_match_checks c WHERE c.user_id = u.id)
+        < (SELECT COUNT(*) FROM trails)
+  ORDER BY COALESCE(
+    (SELECT MAX(s.created_at) FROM sync_log s
+     WHERE s.user_id = u.id AND s.event IN ('cron_match_sweep', 'client_match_batch')),
+    '-infinity'
+  ) ASC
+  LIMIT 1`;
 
 async function pickNextMatchDrainCandidate(): Promise<{ id: string; first_name: string | null } | null> {
   // matchBatchPool, not the shared `pool` — this picker runs every hop of an
@@ -256,8 +278,17 @@ async function pickNextMatchDrainCandidate(): Promise<{ id: string; first_name: 
   let client;
   try {
     client = await matchBatchPool.connect();
+
+    // Step 1: anyone with unchecked trails? (cheap — see INCOMPLETE_CANDIDATE_SQL)
     await client.query("BEGIN");
     await client.query(`SET LOCAL statement_timeout = '${CANDIDATE_QUERY_TIMEOUT_MS}'`);
+    const { rows: incomplete } = await client.query<{ id: string; first_name: string | null }>(INCOMPLETE_CANDIDATE_SQL);
+    await client.query("COMMIT");
+    if (incomplete[0]) return incomplete[0];
+
+    // Step 2: nobody incomplete — fall back to the expensive stale scan.
+    await client.query("BEGIN");
+    await client.query(`SET LOCAL statement_timeout = '${STALE_CANDIDATE_QUERY_TIMEOUT_MS}'`);
     const { rows } = await client.query<{ id: string; first_name: string | null }>(
       `SELECT u.id, u.first_name
        FROM users u
