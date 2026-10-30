@@ -20,6 +20,7 @@ import {
 import { logSyncEvent } from "@/lib/sync-log";
 import { hasBasicAccess } from "@/lib/subscription";
 import { autoDescriptionCutoffSql } from "@/lib/description-cutoff";
+import { isReadyForDescriptions } from "@/lib/description-readiness";
 
 // Finding which of ~1,180 trails are near a BATCH of activities (as opposed
 // to computeTrailProgress's own per-trail queries, which are always scoped
@@ -536,7 +537,11 @@ export async function finishSync(
     });
   }
 
-  if (wantsDescriptionUpdate) {
+  // Only once fully synced + matched (description-readiness.ts). During a
+  // first sync this is always false, so per-chunk matching never writes
+  // preview percentages to Strava; skipped activities stay pending for the
+  // background drain.
+  if (wantsDescriptionUpdate && (await isReadyForDescriptions(userId, dbPool))) {
     const mode: DescriptionMode = userPrefs.description_mode ?? "full";
     const { rows: toUpdate } = await dbPool.query<{ id: string; strava_activity_id: string }>(
       `SELECT id, strava_activity_id::text

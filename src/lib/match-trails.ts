@@ -1,6 +1,7 @@
 import type { Pool, PoolClient } from "pg";
 import { pool } from "@/lib/db";
 import { CYCLING_ACTIVITY_TYPES } from "@/lib/strava";
+import { logSyncEvent } from "@/lib/sync-log";
 
 const BUFFER_METRES = 50;
 // ST_SimplifyPreserveTopology(geom, 0.001) can move points by up to ~111 m.
@@ -604,15 +605,53 @@ export async function matchNextBatch(
   );
   const totalTrails = parseInt(totals.total);
   const totalChecked = parseInt(totals.checked);
+  const done = totalChecked >= totalTrails;
+
+  // Full match finished (this batch did the last of the work) — clear out
+  // orphaned pairs. See cleanupOrphanedPairs.
+  if (done && checkedThisBatch > 0) {
+    await cleanupOrphanedPairs(userId, dbPool).catch((err) => {
+      console.error(`[match-trails] Orphaned-pair cleanup failed for user ${userId}:`, err);
+    });
+  }
 
   return {
     checkedThisBatch,
     matchedThisBatch,
     totalChecked,
     totalTrails,
-    done: totalChecked >= totalTrails,
+    done,
     hadFailures: stillFailingAfterRetry > 0,
   };
+}
+
+// Orphaned pairs (2026-10-30): activity_trail_matches rows whose (user,
+// trail) has no user_trail_progress row. Mostly left by mid-sync work —
+// finishSync registers cheap bbox-nearby candidates before matching runs,
+// and some of those trails then turn out to have no real overlap. Run once
+// a user's full (post-sync) match completes.
+//
+// Only deletes a row if its trail was checked AFTER the row was created:
+// that check saw the activity and still found no overlap, so the row is a
+// confirmed false positive. A fresh candidate (e.g. from a webhook
+// activity whose trail hasn't been re-checked yet) is left alone.
+export async function cleanupOrphanedPairs(userId: string, dbPool: Pool = pool): Promise<number> {
+  const { rowCount } = await dbPool.query(
+    `DELETE FROM activity_trail_matches atm
+     USING trail_match_checks c
+     WHERE atm.user_id = $1
+       AND c.user_id = atm.user_id
+       AND c.trail_id = atm.trail_id
+       AND c.checked_at > atm.created_at
+       AND NOT EXISTS (
+         SELECT 1 FROM user_trail_progress utp
+         WHERE utp.user_id = atm.user_id AND utp.trail_id = atm.trail_id
+       )`,
+    [userId]
+  );
+  const removed = rowCount ?? 0;
+  if (removed > 0) logSyncEvent(userId, "orphaned_pairs_cleaned", { removed });
+  return removed;
 }
 
 export async function getMatchProgress(userId: string): Promise<{ totalChecked: number; totalTrails: number }> {

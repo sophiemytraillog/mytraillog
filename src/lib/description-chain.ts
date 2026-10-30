@@ -4,6 +4,7 @@ import { CHAIN_DISPATCH_ORIGIN } from "@/lib/chain-origin";
 import { logSyncEvent } from "@/lib/sync-log";
 import { ADMIN_USER_ID } from "@/lib/admin";
 import { autoDescriptionCutoffSql } from "@/lib/description-cutoff";
+import { descriptionsReadySql } from "@/lib/description-readiness";
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -208,6 +209,9 @@ async function pickNextDrainCandidate(): Promise<{ id: string; first_name: strin
            -- Premium-only history rule — see description-cutoff.ts.
            AND a.start_date >= ${autoDescriptionCutoffSql("u")}
        )
+       -- Fully synced + matched only (description-readiness.ts) — otherwise
+       -- the drain would keep picking a user whose batch writes nothing.
+       AND ${descriptionsReadySql("u")}
        -- Basic-feature gate (2026-09-30): new-activity description writes
        -- stop for grace_period/expired accounts, same as sync/matching —
        -- see subscription.ts's hasBasicAccess (kept in sync manually, since

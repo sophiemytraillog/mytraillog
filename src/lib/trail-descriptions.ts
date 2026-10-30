@@ -5,6 +5,7 @@ import { formatDist, unitLabel, type DistanceUnit } from "@/lib/distance";
 import { logSyncEvent } from "@/lib/sync-log";
 import { computeNewGroundExcludingActivity } from "@/lib/match-trails";
 import { autoDescriptionCutoffSql } from "@/lib/description-cutoff";
+import { isReadyForDescriptions } from "@/lib/description-readiness";
 
 // Matches the "3 attempts" convention already used elsewhere for transient
 // failures (see match-trails.ts) — enough to ride out a genuine blip, not so
@@ -663,6 +664,12 @@ export async function processDescriptionBatch(
     [userId]
   );
   if (!userPrefs?.strava_description_updates) {
+    return { checkedThisBatch: 0, updatedThisBatch: 0, errorsThisBatch: 0, remaining: 0, done: true, budgetExhausted: false, hadErrors: false };
+  }
+  // Not fully synced + matched yet — write nothing (see
+  // description-readiness.ts). Reported as done so chains stop; the
+  // background drain picks this user up once they're ready.
+  if (!(await isReadyForDescriptions(userId, dbPool))) {
     return { checkedThisBatch: 0, updatedThisBatch: 0, errorsThisBatch: 0, remaining: 0, done: true, budgetExhausted: false, hadErrors: false };
   }
   const mode: DescriptionMode = userPrefs.description_mode ?? "full";

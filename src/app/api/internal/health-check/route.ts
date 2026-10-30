@@ -4,6 +4,7 @@ import { sendNotificationEmail } from "@/lib/email";
 import { runTrialLifecycleCheck } from "@/lib/trial-lifecycle";
 import { CHAIN_DISPATCH_ORIGIN } from "@/lib/chain-origin";
 import { autoDescriptionCutoffSql } from "@/lib/description-cutoff";
+import { descriptionsReadySql } from "@/lib/description-readiness";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -111,7 +112,8 @@ export async function GET(request: NextRequest) {
      WHERE a.strava_description_updated = FALSE
        AND a.description_update_attempts = 0
        AND u.strava_description_updates = TRUE
-       AND a.start_date >= ${autoDescriptionCutoffSql("u")}`
+       AND a.start_date >= ${autoDescriptionCutoffSql("u")}
+       AND ${descriptionsReadySql("u")}`
   );
   if (parseInt(neverAttempted.n) > 0) {
     issues.push(

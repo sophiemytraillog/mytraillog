@@ -13,6 +13,7 @@ import {
   NEW_GROUND_THRESHOLD_M,
   type DescriptionMode,
 } from "@/lib/trail-descriptions";
+import { isReadyForDescriptions } from "@/lib/description-readiness";
 
 export const dynamic = "force-dynamic";
 // Vercel Pro: 300s function limit (vercel.json sets the same value).
@@ -77,6 +78,12 @@ export async function GET(request: NextRequest) {
         );
         if (!statusRow || !hasPremiumAccess(statusRow.subscription_status)) {
           send("error", { message: "Historical descriptions are a premium feature - subscribe to unlock" });
+          return;
+        }
+
+        // Same readiness rule as the automatic writers (description-readiness.ts).
+        if (!(await isReadyForDescriptions(userId))) {
+          send("error", { message: "Your trails are still being matched - try again once matching has finished" });
           return;
         }
 

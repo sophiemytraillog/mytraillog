@@ -20,6 +20,7 @@ import { triggerMatchChain } from "@/lib/match-chain";
 import { logSyncEvent } from "@/lib/sync-log";
 import { hasBasicAccess } from "@/lib/subscription";
 import { autoDescriptionCutoff } from "@/lib/description-cutoff";
+import { isReadyForDescriptions } from "@/lib/description-readiness";
 
 // A single trail's match computation can legitimately take well over a
 // minute for an active user — ST_Union over hundreds/thousands of nearby
@@ -393,9 +394,13 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number) {
     // description-cutoff.ts) — e.g. a trial user uploading an old activity
     // to Strava after signup doesn't get it auto-described.
     const autoSince = userPrefs ? autoDescriptionCutoff(userPrefs) : null;
+    // Also skipped until the user is fully synced + matched
+    // (description-readiness.ts) — the activity is still saved and matched
+    // here, and stays pending for the background drain to describe later.
     const wantsDescriptionUpdate =
       (userPrefs?.strava_description_updates ?? false) &&
-      (!autoSince || new Date(activity.start_date) >= autoSince);
+      (!autoSince || new Date(activity.start_date) >= autoSince) &&
+      (await isReadyForDescriptions(user.id));
 
     console.log(
       `[webhook/strava] Saved activity ${activityId}, matching ${trailIds.length} nearby trail(s)…`

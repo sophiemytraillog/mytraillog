@@ -30,6 +30,7 @@ import { matchNextBatch } from "@/lib/match-trails";
 import { logSyncEvent } from "@/lib/sync-log";
 import { ADMIN_USER_ID } from "@/lib/admin";
 import { autoDescriptionCutoffSql } from "@/lib/description-cutoff";
+import { descriptionsReadySql } from "@/lib/description-readiness";
 
 export type StepStatus = "pass" | "warn" | "fail";
 
@@ -416,7 +417,8 @@ async function checkDrainStatus(): Promise<DiagnosticStep> {
          WHERE a.strava_description_updated = FALSE
            AND u.strava_description_updates = TRUE
            AND u.subscription_status IN ('trial', 'active')
-           AND a.start_date >= ${autoDescriptionCutoffSql("u")}`
+           AND a.start_date >= ${autoDescriptionCutoffSql("u")}
+           AND ${descriptionsReadySql("u")}`
       );
 
       const { rows: throughputRows } = await pool.query<{ day: string; updated: string }>(
