@@ -367,6 +367,31 @@ export async function runSyncChunk(
       }
     }
 
+    // First full-history sync finishing (2026-10-30): throw away every
+    // trail_match_checks row so matching re-runs from scratch against the
+    // complete activity set. Per-chunk matching during the sync (finishSync)
+    // only saw whatever had been fetched so far — fine as an early preview,
+    // but the final percentages must come from the full history. Done
+    // BEFORE flipping to 'complete', because matchNextBatch only runs for
+    // complete users — so nothing can start full matching against the old
+    // checks in between. user_trail_progress is left alone: the preview
+    // numbers stay visible and each trail's row is overwritten as it's
+    // re-matched (coverage only grows as activities are added).
+    //
+    // Only on the FIRST completion (last_synced_at is set solely here, so
+    // NULL means this user has never completed a sync). Routine later syncs
+    // just add a few new activities, which matchNextBatch's stale-check
+    // clause already handles — wiping all ~1,181 checks on every sync would
+    // re-match every trail for every user, every time.
+    const { rows: [prior] } = await dbPool.query<{ last_synced_at: Date | null }>(
+      "SELECT last_synced_at FROM users WHERE id = $1",
+      [userId]
+    );
+    if (prior && prior.last_synced_at === null) {
+      const { rowCount } = await dbPool.query("DELETE FROM trail_match_checks WHERE user_id = $1", [userId]);
+      logSyncEvent(userId, "first_sync_checks_reset", { checksCleared: rowCount ?? 0 });
+    }
+
     await dbPool.query(
       `UPDATE users SET sync_status = 'complete', last_synced_at = NOW() WHERE id = $1`,
       [userId]
