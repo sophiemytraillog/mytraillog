@@ -198,7 +198,27 @@ async function runDrainPhases(): Promise<NextResponse> {
       detailPolyline: { skipped: true, reason: "insufficient time remaining after description phase" },
     });
   }
-  const matching = await runExternalMatchDrainBatch(remainingAfterDescriptions);
+  // Keep matching, batch after batch, until the budget runs out (2026-10-30)
+  // — previously one 30-trail batch per run, then the rest of the run went
+  // to low-priority GPS traces, so a user with ~600 unchecked trails needed
+  // hours. Each call logs a sweep for its user, so the picker rotates to the
+  // next least-recently-swept user on the following iteration. Stops early
+  // when nobody needs matching, a batch times out, or a batch checks nothing.
+  const matchingBatches: Awaited<ReturnType<typeof runExternalMatchDrainBatch>>[] = [];
+  for (;;) {
+    const remaining = TOTAL_REQUEST_BUDGET_MS - elapsed();
+    if (remaining < MIN_USEFUL_MATCH_BUDGET_MS) break;
+    const batch = await runExternalMatchDrainBatch(remaining);
+    matchingBatches.push(batch);
+    if (!batch.candidateId || batch.timedOut || batch.checkedThisBatch === 0) break;
+  }
+  const matching = {
+    batches: matchingBatches.length,
+    checked: matchingBatches.reduce((s, b) => s + b.checkedThisBatch, 0),
+    matched: matchingBatches.reduce((s, b) => s + b.matchedThisBatch, 0),
+    users: Array.from(new Set(matchingBatches.map((b) => b.candidateId).filter(Boolean))),
+    lastBatch: matchingBatches[matchingBatches.length - 1] ?? null,
+  };
 
   // ── 4. Detail polylines — lowest priority, only if time is left ────────
   const remainingAfterMatching = TOTAL_REQUEST_BUDGET_MS - elapsed();
