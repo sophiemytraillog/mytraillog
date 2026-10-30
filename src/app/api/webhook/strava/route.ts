@@ -19,6 +19,7 @@ import { triggerDescriptionChain, triggerDrainIfNotRunToday } from "@/lib/descri
 import { triggerMatchChain } from "@/lib/match-chain";
 import { logSyncEvent } from "@/lib/sync-log";
 import { hasBasicAccess } from "@/lib/subscription";
+import { autoDescriptionCutoff } from "@/lib/description-cutoff";
 
 // A single trail's match computation can legitimately take well over a
 // minute for an active user — ST_Union over hundreds/thousands of nearby
@@ -310,8 +311,10 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number) {
       strava_description_updates: boolean;
       description_mode: DescriptionMode;
       auto_description_since: Date | null;
+      subscription_status: string | null;
+      created_at: Date;
     }>(
-      "SELECT strava_description_updates, description_mode, auto_description_since FROM users WHERE id = $1",
+      "SELECT strava_description_updates, description_mode, auto_description_since, subscription_status, created_at FROM users WHERE id = $1",
       [user.id]
     );
 
@@ -386,10 +389,10 @@ async function handleNewActivity(activityId: number, stravaAthleteId: number) {
       });
     }
 
-    // Same auto-description cut-off as the other automatic writers (see
-    // schema.sql's auto_description_since) — e.g. an old activity uploaded
-    // to Strava after signup isn't auto-described.
-    const autoSince = userPrefs?.auto_description_since ? new Date(userPrefs.auto_description_since) : null;
+    // Premium-only history rule, same as the other automatic writers (see
+    // description-cutoff.ts) — e.g. a trial user uploading an old activity
+    // to Strava after signup doesn't get it auto-described.
+    const autoSince = userPrefs ? autoDescriptionCutoff(userPrefs) : null;
     const wantsDescriptionUpdate =
       (userPrefs?.strava_description_updates ?? false) &&
       (!autoSince || new Date(activity.start_date) >= autoSince);

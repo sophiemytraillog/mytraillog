@@ -3,6 +3,7 @@ import { processDescriptionBatch } from "@/lib/trail-descriptions";
 import { CHAIN_DISPATCH_ORIGIN } from "@/lib/chain-origin";
 import { logSyncEvent } from "@/lib/sync-log";
 import { ADMIN_USER_ID } from "@/lib/admin";
+import { autoDescriptionCutoffSql } from "@/lib/description-cutoff";
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -204,7 +205,8 @@ async function pickNextDrainCandidate(): Promise<{ id: string; first_name: strin
          SELECT 1 FROM activities a
          JOIN activity_trail_matches atm ON atm.activity_id = a.id
          WHERE a.user_id = u.id AND a.strava_description_updated = FALSE
-           AND (u.auto_description_since IS NULL OR a.start_date >= u.auto_description_since)
+           -- Premium-only history rule — see description-cutoff.ts.
+           AND a.start_date >= ${autoDescriptionCutoffSql("u")}
        )
        -- Basic-feature gate (2026-09-30): new-activity description writes
        -- stop for grace_period/expired accounts, same as sync/matching —

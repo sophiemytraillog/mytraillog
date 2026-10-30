@@ -19,6 +19,7 @@ import {
 } from "@/lib/trail-descriptions";
 import { logSyncEvent } from "@/lib/sync-log";
 import { hasBasicAccess } from "@/lib/subscription";
+import { autoDescriptionCutoffSql } from "@/lib/description-cutoff";
 
 // Finding which of ~1,180 trails are near a BATCH of activities (as opposed
 // to computeTrailProgress's own per-trail queries, which are always scoped
@@ -518,11 +519,8 @@ export async function finishSync(
        WHERE id = ANY($1::uuid[])
          AND geometry IS NOT NULL
          AND strava_description_updated = FALSE
-         -- Skip history from before the user's auto-description cut-off
-         -- (schema.sql's auto_description_since; NULL = no cut-off).
-         AND start_date >= COALESCE(
-           (SELECT auto_description_since FROM users WHERE id = $2), '-infinity'::timestamptz
-         )`,
+         -- Premium-only history rule — see description-cutoff.ts.
+         AND start_date >= (SELECT ${autoDescriptionCutoffSql("u")} FROM users u WHERE u.id = $2)`,
       [newDbIds, userId]
     );
     for (const act of toUpdate) {

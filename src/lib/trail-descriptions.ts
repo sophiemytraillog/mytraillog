@@ -4,6 +4,7 @@ import { getValidAccessToken } from "@/lib/strava";
 import { formatDist, unitLabel, type DistanceUnit } from "@/lib/distance";
 import { logSyncEvent } from "@/lib/sync-log";
 import { computeNewGroundExcludingActivity } from "@/lib/match-trails";
+import { autoDescriptionCutoffSql } from "@/lib/description-cutoff";
 
 // Matches the "3 attempts" convention already used elsewhere for transient
 // failures (see match-trails.ts) — enough to ride out a genuine blip, not so
@@ -681,11 +682,8 @@ export async function processDescriptionBatch(
      FROM activities a
      JOIN activity_trail_matches atm ON atm.activity_id = a.id
      WHERE a.user_id = $1 AND a.strava_description_updated = FALSE
-       -- Automatic writes skip history from before the user's cut-off
-       -- (schema.sql's auto_description_since; NULL = no cut-off).
-       AND a.start_date >= COALESCE(
-         (SELECT auto_description_since FROM users WHERE id = $1), '-infinity'::timestamptz
-       )
+       -- Premium-only history rule — see description-cutoff.ts.
+       AND a.start_date >= (SELECT ${autoDescriptionCutoffSql("u")} FROM users u WHERE u.id = $1)
      ORDER BY a.strava_activity_id DESC`,
     [userId]
   );
