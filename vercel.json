@@ -30,6 +30,10 @@
     {
       "path": "/api/internal/health-check",
       "schedule": "30 3 * * *"
+    },
+    {
+      "path": "/api/internal/drain-batch",
+      "schedule": "*/30 * * * *"
     }
   ]
 }
