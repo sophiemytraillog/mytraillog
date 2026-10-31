@@ -267,6 +267,7 @@ function FirstSyncBanner({
           key={lastSyncedAt ? lastSyncedAt.getTime() : "never"}
           initialChecked={matchProgress.totalChecked}
           initialTotal={matchProgress.totalTrails}
+          refreshOnNationalReady
         />
       </div>
     </div>

@@ -152,6 +152,43 @@ export default function SyncButton({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSync, hasBasicAccess]);
 
+  // Background sync progress (2026-10-31): once the server's background
+  // chain takes over there's no live connection, so the "saved so far"
+  // count used to freeze at whatever the first chunk reported. Poll the
+  // real activity count every 10s instead, and switch to the finished
+  // message once the server reports the sync complete.
+  useEffect(() => {
+    if (syncState !== "background") return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const res = await fetch("/api/sync/match-progress");
+        if (!res.ok) return;
+        const p: { activityCount: number; syncStatus: string | null } = await res.json();
+        if (cancelled) return;
+        const savedThisSync = Math.max(baseRef.current.saved, p.activityCount - initialActivityCount);
+        baseRef.current = { ...baseRef.current, saved: savedThisSync };
+        if (p.syncStatus === "complete") {
+          setActivityCount(p.activityCount);
+          setData({
+            ...baseRef.current,
+            message: `Sync complete - ${savedThisSync} activit${savedThisSync === 1 ? "y" : "ies"} saved`,
+          });
+          setSyncState("done");
+        } else {
+          setData((prev) => ({ ...prev, saved: savedThisSync }));
+        }
+      } catch {
+        // Transient — try again on the next tick.
+      }
+    };
+    const interval = setInterval(tick, 10_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [syncState, initialActivityCount]);
+
   if (compact) {
     if (syncState === "syncing") {
       return (
