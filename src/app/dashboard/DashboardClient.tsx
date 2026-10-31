@@ -171,7 +171,7 @@ function NeedsReauthBanner() {
   return (
     <div className="bg-[#C4652A] text-white rounded-2xl px-5 py-4 mb-4 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
       <p className="text-sm font-medium flex-1 leading-snug">
-        Your Strava connection needs updating - click Connect with Strava to re-authorise.
+        Your Strava connection is missing permissions - click Connect with Strava and keep all the boxes ticked on Strava&apos;s screen.
       </p>
       <a
         href="/api/auth/strava"

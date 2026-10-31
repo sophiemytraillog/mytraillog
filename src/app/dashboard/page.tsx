@@ -248,8 +248,12 @@ export default async function Dashboard({
   // trails are ready" signal, well before the full background catch-up
   // finishes. Requires basicAccess so a grace_period/expired account (which
   // can't sync/match further anyway) never gets stuck showing this.
+  // Not while the Strava connection needs re-authorising: the first-sync
+  // banner replaces the whole dashboard, which would hide the reconnect
+  // banner — and a sync that can't read activities will never progress.
   const showFirstSyncBanner =
     !!userId &&
+    !needsReauth &&
     hasBasicAccess(subscriptionStatus) &&
     (stats?.sync_status === "syncing" || matchProgress.totalChecked < matchProgress.totalTrails) &&
     nationalMatchProgress.total > 0 &&

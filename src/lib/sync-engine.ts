@@ -269,6 +269,17 @@ export async function runSyncChunk(
           headers: { Authorization: `Bearer ${accessToken}` },
         });
         if (res.status === 429) return "rate_limited" as const;
+        // 401/403: the token doesn't grant activity access — most often the
+        // user unticked "View data about your activities" on Strava's
+        // consent screen (confirmed: David Thomas, 2026-10-31, scope
+        // "activity:write profile:read_all read"). Retrying can never
+        // succeed until they reconnect, so flag needs_reauth: the dashboard
+        // then shows the reconnect banner, and drain-batch's error retry
+        // skips the account instead of hitting Strava every few minutes.
+        // The flag clears automatically on a successful reconnect.
+        if (res.status === 401 || res.status === 403) {
+          await dbPool.query("UPDATE users SET needs_reauth = TRUE WHERE id = $1", [userId]).catch(() => {});
+        }
         if (!res.ok) throw new Error(`Strava API error ${res.status}: ${await res.text()}`);
 
         const rawBody = await res.text();

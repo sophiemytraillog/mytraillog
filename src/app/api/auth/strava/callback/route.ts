@@ -160,6 +160,18 @@ export async function GET(request: NextRequest) {
     const result = await query<{ id: string }>(upsertUserSql, upsertUserParams);
     dbUserId = result.rows[0]?.id ?? null;
     console.log("[strava/callback] User upserted. DB id:", dbUserId);
+
+    // Strava lets people untick individual permissions on its consent
+    // screen. Without activity read access nothing can sync (every call
+    // returns 401 — David Thomas, 2026-10-31), so flag needs_reauth right
+    // away: the dashboard shows the reconnect banner instead of a sync that
+    // can only fail. (The upsert above just cleared the flag; this re-sets
+    // it only when the grant is actually missing.)
+    const grantedScope: string | null = data.scope ?? null;
+    if (dbUserId && grantedScope !== null && !grantedScope.includes("activity:read")) {
+      console.warn(`[strava/callback] Athlete ${athlete.id} connected without activity read permission (scope: ${grantedScope})`);
+      await query("UPDATE users SET needs_reauth = TRUE WHERE id = $1", [dbUserId]);
+    }
   } catch (err) {
     // Log but don't block the auth flow — user can still reach the dashboard
     console.error("[strava/callback] DB upsert failed:", err);

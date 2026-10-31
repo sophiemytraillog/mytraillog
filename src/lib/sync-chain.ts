@@ -310,6 +310,10 @@ async function pickNextStaleSyncCandidate(): Promise<{ id: string; first_name: s
          OR (sync_status = 'error'
           AND sync_progress_at < NOW() - INTERVAL '${EXTERNAL_SYNC_ERROR_RETRY_SECONDS} seconds')
        )
+       -- An account whose Strava token lacks permission can't sync until the
+       -- user reconnects (see sync-engine.ts's 401/403 handling) — retrying
+       -- would just fail again.
+       AND NOT needs_reauth
        -- Basic-feature gate (2026-09-30 convention, see match-chain.ts and
        -- description-chain.ts's own candidate queries) — kept in sync
        -- manually since this runs as raw SQL rather than importing
