@@ -231,6 +231,8 @@ const CANDIDATE_QUERY_TIMEOUT_MS = 10_000;
 // drain matched nobody for ~40 minutes (2026-10-30). It now only runs when
 // no user has unchecked trails (the cheap first query), and gets more time.
 const STALE_CANDIDATE_QUERY_TIMEOUT_MS = 60_000;
+// See step 2 in pickNextMatchDrainCandidate.
+const STALE_SCAN_MIN_INTERVAL_MINUTES = 60;
 
 // Users with trails never checked at all — a cheap count comparison, and
 // the users who matter most (still short of 1,181/1,181).
@@ -286,7 +288,27 @@ async function pickNextMatchDrainCandidate(): Promise<{ id: string; first_name: 
     await client.query("COMMIT");
     if (incomplete[0]) return incomplete[0];
 
-    // Step 2: nobody incomplete — fall back to the expensive stale scan.
+    // Step 2: nobody incomplete — fall back to the expensive stale scan, but
+    // at most once per STALE_SCAN_MIN_INTERVAL_MINUTES across all callers
+    // (2026-10-31). Once everyone reached 1,181/1,181, the drain's matching
+    // loop ran this ~23s+ scan after every batch, continuously, pushing
+    // Supabase to 91% CPU. Stale checks only mean a recent activity may need
+    // re-checking against a trail — never urgent. The slot is claimed with a
+    // single atomic insert into sync_log, so overlapping callers can't both
+    // run it.
+    const { rows: claimed } = await client.query<{ id: string }>(
+      `INSERT INTO sync_log (user_id, event, detail)
+       SELECT $1, 'match_stale_scan', NULL
+       WHERE NOT EXISTS (
+         SELECT 1 FROM sync_log
+         WHERE user_id = $1 AND event = 'match_stale_scan'
+           AND created_at > NOW() - INTERVAL '${STALE_SCAN_MIN_INTERVAL_MINUTES} minutes'
+       )
+       RETURNING id`,
+      [ADMIN_USER_ID]
+    );
+    if (claimed.length === 0) return null;
+
     await client.query("BEGIN");
     await client.query(`SET LOCAL statement_timeout = '${STALE_CANDIDATE_QUERY_TIMEOUT_MS}'`);
     const { rows } = await client.query<{ id: string; first_name: string | null }>(
