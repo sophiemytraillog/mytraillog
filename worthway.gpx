@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<gpx version="1.1" 
+creator="Memory-Map 5.4.2.1089 http://www.memory-map.com"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xmlns="http://www.topografix.com/GPX/1/1"
+ xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">
+<trk>
+<name>Worth Way (Sussex)</name>
+<type>Track</type>
+<trkseg>
+<trkpt lat="51.1153227197" lon="-0.1601760990"></trkpt>
+<trkpt lat="51.1135235809" lon="-0.1587117498"></trkpt>
+<trkpt lat="51.1120355403" lon="-0.1555921956"></trkpt>
+<trkpt lat="51.1122492099" lon="-0.1506191377"></trkpt>
+<trkpt lat="51.1118170985" lon="-0.1488863195"></trkpt>
+<trkpt lat="51.1120831590" lon="-0.1472327459"></trkpt>
+<trkpt lat="51.1115129764" lon="-0.1467198252"></trkpt>
+<trkpt lat="51.1108384374" lon="-0.1428131703"></trkpt>
+<trkpt lat="51.1116987156" lon="-0.1375290667"></trkpt>
+<trkpt lat="51.1128135476" lon="-0.1341273049"></trkpt>
+<trkpt lat="51.1133049432" lon="-0.1311076122"></trkpt>
+<trkpt lat="51.1126269180" lon="-0.1280635775"></trkpt>
+<trkpt lat="51.1128984327" lon="-0.1225527542"></trkpt>
+<trkpt lat="51.1141275744" lon="-0.1235030482"></trkpt>
+<trkpt lat="51.1146283119" lon="-0.1154826565"></trkpt>
+<trkpt lat="51.1178330047" lon="-0.0884927024"></trkpt>
+<trkpt lat="51.1199214721" lon="-0.0814770302"></trkpt>
+<trkpt lat="51.1216551103" lon="-0.0720463446"></trkpt>
+<trkpt lat="51.1227292292" lon="-0.0662861276"></trkpt>
+<trkpt lat="51.1246733229" lon="-0.0587745043"></trkpt>
+<trkpt lat="51.1263285286" lon="-0.0528462740"></trkpt>
+<trkpt lat="51.1271639763" lon="-0.0463090123"></trkpt>
+<trkpt lat="51.1262498742" lon="-0.0373445467"></trkpt>
+<trkpt lat="51.1263187540" lon="-0.0280528098"></trkpt>
+<trkpt lat="51.1267752929" lon="-0.0204593274"></trkpt>
+<trkpt lat="51.1265765343" lon="-0.0166807616"></trkpt>
+</trkseg>
+</trk>
+</gpx>
