@@ -537,7 +537,7 @@ export async function matchNextBatch(
   // the total before matching has really seen every activity. Users mid-
   // sync (or whose sync errored, which drain-batch now retries) are
   // skipped; sync completion triggers the match chain, and the match
-  // drain picks up anyone else. finishSync's per-chunk nearby-trail
+  // drain picks up anyone else. finishSync's per-chunk National Trail
   // matching and the webhook are deliberately NOT gated (early progress
   // for new users), so they still call computeTrailProgress directly.
   const { rows: [syncRow] } = await dbPool.query<{ sync_status: string }>(

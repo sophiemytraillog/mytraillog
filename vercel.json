@@ -40,7 +40,7 @@
     },
     {
       "path": "/api/internal/drain-batch",
-      "schedule": "*/30 * * * *"
+      "schedule": "*/5 * * * *"
     }
   ]
 }

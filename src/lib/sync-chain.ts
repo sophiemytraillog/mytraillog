@@ -242,9 +242,9 @@ export async function runSyncChunkAndChain(userId: string, hop = 0): Promise<voi
 
   if (result.status === "complete") {
     console.log(`[sync-chain] Complete for user ${userId} after ${hop + 1} hop(s)`);
-    // Catch up the wider match/description backlog, same as the SSE route's
-    // own "complete" branch — finishSync above only covered trails near
-    // this hop's own activities (MAX_TRAILS_PER_FINISH_SYNC cap).
+    // Start full matching now that every activity is saved, same as the
+    // SSE route's own "complete" branch — finishSync above only covers
+    // National Trails (see sync-engine.ts).
     await Promise.all([
       triggerMatchChain(userId),
       triggerDescriptionChain(userId, "sync"),

@@ -418,10 +418,11 @@ export async function runSyncChunk(
 }
 
 /**
- * Runs after a sync chunk reaches "complete": scopes trail matching to
- * trails near the newly-saved activities (not the whole trails table — see
- * computeTrailProgress), then writes Strava descriptions for matched
- * activities if the user has opted in. Safe to call multiple times.
+ * Runs after each sync chunk: matches the newly-saved activities against
+ * nearby NATIONAL TRAILS only (see the query below for why), then writes
+ * Strava descriptions for matched activities if the user has opted in.
+ * All other trails are left to the background match chain. Safe to call
+ * multiple times.
  *
  * `dbPool` — see runSyncChunk's doc comment; same reasoning, same default.
  */
@@ -445,25 +446,30 @@ export async function finishSync(
   const wantsDescriptionUpdate = userPrefs?.strava_description_updates ?? false;
 
   try {
-    // National Trails first within the cap below — they're the ~20 trails
-    // (of 1,181) users actually look for immediately, so a brand-new
-    // account should see progress on those right away rather than whatever
-    // 40 happen to come back from the bbox scan in no particular order.
-    // Wrapped in a subquery because Postgres rejects an ORDER BY expression
-    // on SELECT DISTINCT unless it's plain output columns.
+    // National Trails ONLY (2026-11-02). Per-chunk inline matching used to
+    // cover up to 40 of ANY nearby trails, and on a large first sync (a
+    // 1,838-activity account, 20-85 nearby trails per chunk) those heavy
+    // MATCH_SQL unions ran alongside every chunk, loading the database so
+    // much that the sync itself took ~1.5 hours. Now sync just fetches and
+    // saves; the ~20 National Trails still get matched per chunk so the
+    // dashboard's first-sync banner (TrailMatchProgress, which counts
+    // National Trails) shows early progress. Every other trail is matched
+    // by the background match chain, which sync completion triggers
+    // (matchNextBatch only runs once sync_status = 'complete'), and the
+    // drain cron picks up anything missed. On later routine syncs,
+    // matchNextBatch's STALE clause rechecks any trail near a new activity.
     const { rows: nearbyTrails } = await dbPool.query<{ id: string }>(
-      `SELECT id FROM (
-         SELECT DISTINCT t.id, t.category, t.name
-         FROM activities a
-         JOIN trails t ON t.simplified_geometry && ST_Expand(a.geometry, ${NEARBY_TRAILS_BBOX_DEGREES})
-         WHERE a.id = ANY($1::uuid[]) AND a.geometry IS NOT NULL
-       ) nearby
-       ORDER BY (category = 'national_trail') DESC, name ASC`,
+      `SELECT DISTINCT t.id
+       FROM activities a
+       JOIN trails t ON t.simplified_geometry && ST_Expand(a.geometry, ${NEARBY_TRAILS_BBOX_DEGREES})
+       WHERE a.id = ANY($1::uuid[]) AND a.geometry IS NOT NULL
+         AND t.category = 'national_trail'`,
       [newDbIds]
     );
     const allTrailIds = nearbyTrails.map((r) => r.id);
     const trailIds = allTrailIds.slice(0, MAX_TRAILS_PER_FINISH_SYNC);
     logSyncEvent(userId, "matching_triggered", {
+      scope: "national_trails",
       newActivities: newDbIds.length,
       nearbyTrails: allTrailIds.length,
       processing: trailIds.length,
