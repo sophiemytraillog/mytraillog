@@ -1,4 +1,140 @@
-import { Pool, QueryResultRow } from "pg";
+import { Client, Pool, QueryResult, QueryResultRow } from "pg";
+
+// ── Per-query statement_timeout through Supabase's transaction-mode pooler ──
+//
+// DATABASE_URL goes through Supavisor on port 6543 (transaction mode). It
+// ignores connection-time settings (pg's `statement_timeout` option and
+// `options=-c statement_timeout=...` were both tested 2026-11-02: SHOW still
+// reported the server default of 2min), and a plain session-level `SET`
+// lands on whichever backend happens to serve it — it can leak to other
+// requests sharing that backend, or never apply to the next query at all.
+// The only reliable way to bound a statement is `SET LOCAL` inside the same
+// transaction as the statement itself.
+//
+// TimeoutClient does that automatically:
+//   - A standalone statement runs as `BEGIN; SET LOCAL statement_timeout = N`
+//     → statement → COMMIT (ROLLBACK on error).
+//   - An explicit BEGIN gets `SET LOCAL statement_timeout = N` right after it;
+//     any `SET LOCAL statement_timeout` the code issues later in that
+//     transaction overrides it as before (e.g. match-trails.ts's 3 min).
+//   - `SET [LOCAL] statement_timeout = X` outside a transaction is NOT sent
+//     (that's what leaked); X becomes the limit for the rest of this
+//     checkout instead, so routes like fill-gaps (55s) keep their own limit.
+//     Reset on every checkout via the pool's "acquire" event.
+//
+// Caveat: statement_timeout only stops a query at a point where Postgres
+// checks for cancellation. Heavy PostGIS/GEOS unions can run well past it —
+// a MATCH_SQL query with a 3-minute SET LOCAL was seen running for ~12 min.
+const TXN_START = /^\s*(BEGIN|START\s+TRANSACTION)\b/i;
+const TXN_END = /^\s*(COMMIT|END|ABORT|ROLLBACK)\b(?!\s+(?:WORK\s+|TRANSACTION\s+)?TO\b)/i;
+const SET_TIMEOUT =
+  /^\s*SET\s+(?:(?:LOCAL|SESSION)\s+)?statement_timeout\s*(?:=|TO)\s*'?\s*(\d+)\s*(ms|s|min)?\s*'?\s*;?\s*$/i;
+const RESET_TIMEOUT = /^\s*RESET\s+statement_timeout\s*;?\s*$/i;
+// Statements that can't run inside a transaction block, or that shouldn't be
+// wrapped (session/transaction control, utility commands).
+const NO_WRAP =
+  /^\s*(SET|RESET|SHOW|VACUUM|ANALYZE|CREATE\s+(UNIQUE\s+)?INDEX\s+CONCURRENTLY|DROP\s+INDEX\s+CONCURRENTLY|REINDEX|CLUSTER|LISTEN|UNLISTEN|NOTIFY|COPY|SAVEPOINT|RELEASE|PREPARE\s+TRANSACTION|COMMIT\s+PREPARED|ROLLBACK\s+PREPARED|DISCARD|DEALLOCATE)\b/i;
+
+function timeoutToMs(value: string, unit: string | undefined): number {
+  const n = parseInt(value, 10);
+  switch (unit?.toLowerCase()) {
+    case "s":
+      return n * 1000;
+    case "min":
+      return n * 60_000;
+    default:
+      return n;
+  }
+}
+
+function makeTimeoutClient(defaultTimeoutMs: number) {
+  return class TimeoutClient extends Client {
+    private inTxn = false;
+    private overrideMs: number | null = null;
+
+    resetTimeoutState() {
+      this.inTxn = false;
+      this.overrideMs = null;
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    query(config: any, values?: any, callback?: any): any {
+      if (typeof values === "function") {
+        callback = values;
+        values = undefined;
+      }
+      // Only plain text queries are managed; submittables (cursors, streams)
+      // pass straight through.
+      const text =
+        typeof config === "string"
+          ? config
+          : config && typeof config.text === "string" && typeof config.submit !== "function"
+            ? config.text
+            : null;
+      if (text === null) return super.query(config, values, callback);
+
+      const result = this.runWithTimeout(text, config, values);
+      if (typeof callback === "function") {
+        result.then((res) => callback(null, res), (err) => callback(err));
+        return undefined;
+      }
+      return result;
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    private raw(config: any, values?: any): Promise<QueryResult> {
+      return super.query(config, values);
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    private async runWithTimeout(text: string, config: any, values: any): Promise<QueryResult> {
+      const set = text.match(SET_TIMEOUT);
+      if (set) {
+        const ms = timeoutToMs(set[1], set[2]);
+        if (this.inTxn) return this.raw(`SET LOCAL statement_timeout = ${ms}`);
+        this.overrideMs = ms;
+        return { command: "SET", rowCount: null, oid: 0, rows: [], fields: [] };
+      }
+      if (RESET_TIMEOUT.test(text)) {
+        this.overrideMs = null;
+        if (this.inTxn) return this.raw(`SET LOCAL statement_timeout = ${defaultTimeoutMs}`);
+        return { command: "RESET", rowCount: null, oid: 0, rows: [], fields: [] };
+      }
+
+      const timeoutMs = this.overrideMs ?? defaultTimeoutMs;
+
+      if (TXN_START.test(text)) {
+        const res = await this.raw(config, values);
+        this.inTxn = true;
+        await this.raw(`SET LOCAL statement_timeout = ${timeoutMs}`);
+        return res;
+      }
+      if (TXN_END.test(text)) {
+        try {
+          return await this.raw(config, values);
+        } finally {
+          this.inTxn = false;
+        }
+      }
+      if (this.inTxn || NO_WRAP.test(text)) return this.raw(config, values);
+
+      await this.raw(`BEGIN; SET LOCAL statement_timeout = ${timeoutMs}`);
+      try {
+        const res = await this.raw(config, values);
+        await this.raw("COMMIT");
+        return res;
+      } catch (err) {
+        await this.raw("ROLLBACK").catch(() => {});
+        throw err;
+      }
+    }
+  };
+}
+
+// Default per-statement limit for the shared, user-facing pool. Code that
+// needs longer (matching's 3 min, fill-gaps' 55s) sets its own, as before.
+// The background batch pools below are left on the server default (2min).
+const MAIN_POOL_STATEMENT_TIMEOUT_MS = 30_000;
 
 // Singleton pool — prevents exhausting connections during Next.js hot reloads
 const globalForPg = globalThis as unknown as {
@@ -30,6 +166,7 @@ export const pool =
     max: process.env.NODE_ENV === "production" ? 6 : 10,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
+    Client: makeTimeoutClient(MAIN_POOL_STATEMENT_TIMEOUT_MS),
   });
 
 // node-postgres emits 'error' on the Pool itself (not on whatever client
@@ -51,6 +188,10 @@ export const pool =
 if (isNewPool) {
   pool.on("error", (err) => {
     console.error("[db] Idle pool client error:", err.message);
+  });
+  // A timeout set by one route must not carry over to the next checkout.
+  pool.on("acquire", (client) => {
+    (client as unknown as { resetTimeoutState?: () => void }).resetTimeoutState?.();
   });
 }
 
