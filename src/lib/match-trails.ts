@@ -39,6 +39,9 @@ const SIMPLIFY_MARGIN = 200;
 // nearby-others lookup.
 const MATCH_BBOX_MARGIN_DEGREES = 0.003;
 
+// ~7-11 m in the UK. See combined_buffer in MATCH_SQL.
+const ACTIVITY_SIMPLIFY_DEGREES = 0.0001;
+
 const MATCH_SQL = `
   WITH
   -- Union all activity buffers into one polygon so overlapping runs don't double-count.
@@ -58,9 +61,18 @@ const MATCH_SQL = `
   -- rows out of 972 bbox candidates. A plain column reference can't be
   -- "recomputed", so this is immune to that flattening regardless of what
   -- the planner decides to inline.
+  --
+  -- Activity lines are simplified (~10 m tolerance, ACTIVITY_SIMPLIFY_DEGREES)
+  -- before buffering (2026-11-02). Buffering raw GPS lines was pathological
+  -- for some activities: a 152 km backyard ultra (7,302 points, ~23 laps
+  -- stacked on one small loop) made a single Peddars Way match run 3+ min
+  -- past its statement_timeout — GEOS buffer/union work can't be
+  -- interrupted — and enough of those at once took the whole database
+  -- down. At ~10 m against a 50 m buffer the effect on coverage is
+  -- negligible.
   combined_buffer AS (
     SELECT
-      ST_Union(ST_Buffer(a.geometry::geography, ${BUFFER_METRES})::geometry) AS geom,
+      ST_Union(ST_Buffer(ST_Simplify(a.geometry, ${ACTIVITY_SIMPLIFY_DEGREES})::geography, ${BUFFER_METRES})::geometry) AS geom,
       COUNT(DISTINCT a.id)  AS activity_count,
       MIN(a.start_date)     AS first_date,
       MAX(a.start_date)     AS last_date
