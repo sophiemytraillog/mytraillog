@@ -118,7 +118,14 @@ function makeTimeoutClient(defaultTimeoutMs: number) {
       }
       if (this.inTxn || NO_WRAP.test(text)) return this.raw(config, values);
 
-      await this.raw(`BEGIN; SET LOCAL statement_timeout = ${timeoutMs}`);
+      // idle_in_transaction_session_timeout: if the function is frozen or
+      // killed between the statement and COMMIT (seen 2026-11-02: a
+      // fire-and-forget sync_log INSERT left "idle in transaction" for 4+
+      // min, holding a pooler backend), Postgres ends the session itself.
+      // The only gaps in this transaction are network round trips.
+      await this.raw(
+        `BEGIN; SET LOCAL statement_timeout = ${timeoutMs}; SET LOCAL idle_in_transaction_session_timeout = 15000`
+      );
       try {
         const res = await this.raw(config, values);
         await this.raw("COMMIT");

@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
-import { query } from "@/lib/db";
+import type { QueryResultRow } from "pg";
+import { pool } from "@/lib/db";
 import { ADMIN_USER_ID } from "@/lib/admin";
 import KickUserButton from "./KickUserButton";
 import ResyncButton from "./ResyncButton";
@@ -53,7 +54,7 @@ interface UserRow {
   trails_total: string;
   sync_status: string;
   stale_sync: boolean;
-  geometry_count: string;
+  has_geometry: boolean;
 }
 
 function formatDate(d: string | Date): string {
@@ -74,9 +75,15 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
   );
 }
 
-export default async function AdminPage() {
-  const userId = cookies().get("strava_user_id")?.value;
-  if (userId !== ADMIN_USER_ID) notFound();
+async function loadAdminData() {
+  // One checked-out client with a 2-minute limit instead of the main pool's
+  // 30s default (see db.ts): this is an internal page, and while background
+  // matching is hammering the database its queries can legitimately take
+  // longer than 30s. Better slow than an error page.
+  const client = await pool.connect();
+  try {
+  await client.query("SET statement_timeout = '120000'");
+  const query = <T extends QueryResultRow>(sql: string) => client.query<T>(sql);
 
   // Sequential, not Promise.all — DATABASE_URL's sslmode=require is treated
   // as verify-full by newer pg versions, which only reliably cooperates with
@@ -125,11 +132,18 @@ export default async function AdminPage() {
   // disk-capacity issue (the whole DB is 151MB), just this query's fan-out.
   // Pre-aggregating each table separately first means each join side is
   // already one row per user, so there's nothing left to multiply.
+  //
+  // has_geometry is an EXISTS, not a COUNT(*) FILTER (WHERE geometry IS NOT
+  // NULL): the count had to read the whole 275MB activities heap and took
+  // 55s while matching was running (2026-11-02), past the page's timeout.
+  // The page only needs "any geometry at all" for its anomaly flag, which
+  // the user_id index answers after the first row. The plain per-user count
+  // is an index-only scan on idx_activities_user_id (~1s under load).
   const usersResult = await query<UserRow>(
     `SELECT u.id, u.first_name, u.last_name, u.created_at, u.sync_status,
             (u.sync_status = 'syncing' AND u.sync_progress_at < NOW() - INTERVAL '3 minutes') AS stale_sync,
             COALESCE(ac.activity_count, 0)::text AS activity_count,
-            COALESCE(ac.geometry_count, 0)::text AS geometry_count,
+            EXISTS (SELECT 1 FROM activities a WHERE a.user_id = u.id AND a.geometry IS NOT NULL) AS has_geometry,
             COALESCE(tc.trail_match_count, 0)::text AS trail_match_count,
             -- Matching progress: trails with a trail_match_checks row out of
             -- all current trails. Fully matched when checked = total. Only
@@ -139,9 +153,7 @@ export default async function AdminPage() {
             (SELECT COUNT(*) FROM trails)::text AS trails_total
      FROM users u
      LEFT JOIN (
-       SELECT user_id,
-              COUNT(*) AS activity_count,
-              COUNT(*) FILTER (WHERE geometry IS NOT NULL) AS geometry_count
+       SELECT user_id, COUNT(*) AS activity_count
        FROM activities
        GROUP BY user_id
      ) ac ON ac.user_id = u.id
@@ -165,6 +177,17 @@ export default async function AdminPage() {
   const requestedTrails = requestedTrailsResult.rows;
   const callsUsedToday = apiUsageResult.rows[0]?.calls_used ?? 0;
   const users = usersResult.rows;
+  return { totals, newUsers, popularTrails, requestedTrails, callsUsedToday, users };
+  } finally {
+    client.release();
+  }
+}
+
+export default async function AdminPage() {
+  const userId = cookies().get("strava_user_id")?.value;
+  if (userId !== ADMIN_USER_ID) notFound();
+
+  const { totals, newUsers, popularTrails, requestedTrails, callsUsedToday, users } = await loadAdminData();
 
   return (
     <div className="min-h-screen bg-[#FAF8F5] px-6 py-10">
@@ -268,7 +291,7 @@ export default async function AdminPage() {
                 {users.map((u) => {
                   // Same anomaly this whole page exists to catch: activities
                   // with real geometry but nothing matched to any trail.
-                  const anomaly = parseInt(u.geometry_count) > 0 && parseInt(u.trail_match_count) === 0;
+                  const anomaly = u.has_geometry && parseInt(u.trail_match_count) === 0;
                   return (
                     <tr key={u.id} id={`user-${u.id}`}>
                       <td className="px-4 py-2.5 text-[#2C2520]">
