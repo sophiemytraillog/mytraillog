@@ -80,25 +80,40 @@ export async function GET(request: NextRequest) {
   // matchNextBatch's own candidate query (match-trails.ts) — a nonzero
   // count here is expected background noise (self-heals the next time
   // that user's chain runs) unless it's large or growing across days.
-  const stale = await pool.query<{ first_name: string | null; last_name: string | null; stale_trails: string }>(
-    `SELECT u.first_name, u.last_name, COUNT(DISTINCT c.trail_id)::text AS stale_trails
-     FROM trail_match_checks c
-     JOIN users u ON u.id = c.user_id
-     JOIN trails t ON t.id = c.trail_id
-     WHERE EXISTS (
-       SELECT 1 FROM activities a
-       WHERE a.user_id = c.user_id AND a.geometry IS NOT NULL
-         AND a.created_at > c.checked_at
-         AND t.simplified_geometry && ST_Expand(a.geometry, 0.003)
-     )
-     GROUP BY u.id, u.first_name, u.last_name`
-  );
-  const totalStale = stale.rows.reduce((sum, r) => sum + parseInt(r.stale_trails), 0);
-  if (totalStale > 0) {
-    issues.push(
-      `${totalStale} stale trail_match_checks pair(s) across ${stale.rows.length} user(s): ` +
-        stale.rows.map((u) => `${u.first_name} ${u.last_name} (${u.stale_trails})`).join(", ")
+  //
+  // Runs on its own checkout with a 2-minute limit: this scan took 81s on
+  // 2026-11-03, past the main pool's 30s default (db.ts), and the
+  // uncaught timeout crashed the whole health check before it could email.
+  // A failure here is now reported as an issue instead of aborting the run.
+  const staleClient = await pool.connect();
+  try {
+    await staleClient.query("SET statement_timeout = '120000'");
+    const stale = await staleClient.query<{ first_name: string | null; last_name: string | null; stale_trails: string }>(
+      `SELECT u.first_name, u.last_name, COUNT(DISTINCT c.trail_id)::text AS stale_trails
+       FROM trail_match_checks c
+       JOIN users u ON u.id = c.user_id
+       JOIN trails t ON t.id = c.trail_id
+       WHERE EXISTS (
+         SELECT 1 FROM activities a
+         WHERE a.user_id = c.user_id AND a.geometry IS NOT NULL
+           AND a.created_at > c.checked_at
+           AND t.simplified_geometry && ST_Expand(a.geometry, 0.003)
+       )
+       GROUP BY u.id, u.first_name, u.last_name`
     );
+    const totalStale = stale.rows.reduce((sum, r) => sum + parseInt(r.stale_trails), 0);
+    if (totalStale > 0) {
+      issues.push(
+        `${totalStale} stale trail_match_checks pair(s) across ${stale.rows.length} user(s): ` +
+          stale.rows.map((u) => `${u.first_name} ${u.last_name} (${u.stale_trails})`).join(", ")
+      );
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[internal/health-check] Stale-check query failed:", err);
+    issues.push(`Stale trail_match_checks check failed: ${message}`);
+  } finally {
+    staleClient.release();
   }
 
   // 4. Confirmed trail match, description writes on, never even attempted —
